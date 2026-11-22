@@ -19,6 +19,31 @@ export const NOTE_SCHEMA = [
   'CREATE TABLE IF NOT EXISTS note_reads (user_id TEXT NOT NULL, subject INTEGER NOT NULL, seen_at INTEGER NOT NULL, PRIMARY KEY (user_id, subject))',
 ];
 
+// 정리를 고친 사람도 도움됐어요를 받으려면, 그 정리에 이만큼 이상 글을 더했어야 해요 (오타만 고친 건 제외)
+export const CREDIT_MIN_CHARS = 20;
+
+// 새로 생긴 줄의 글자 수 (예전 글에 없던 줄만 셈)
+export function addedChars(oldBody, newBody) {
+  const old = new Set(String(oldBody || '').split('\n').map((l) => l.trim()));
+  let n = 0;
+  for (const l of String(newBody || '').split('\n')) { const t = l.trim(); if (t && !old.has(t)) n += t.length; }
+  return n;
+}
+
+// 이미 있는 데이터베이스에 칸 추가 + 예전 기록의 '더한 글자 수' 채우기
+export async function migrateNotes(db) {
+  const { results: cols } = await db.prepare('PRAGMA table_info(note_revisions)').all();
+  if (cols.some((c) => c.name === 'added')) return;
+  await db.prepare('ALTER TABLE note_revisions ADD COLUMN added INTEGER NOT NULL DEFAULT 0').run();
+  const { results } = await db.prepare('SELECT id, note_id, rev, body FROM note_revisions ORDER BY note_id, rev').all();
+  let prev = { note: null, body: '' };
+  for (const r of results) {
+    const before = prev.note === r.note_id ? prev.body : '';
+    await db.prepare('UPDATE note_revisions SET added = ? WHERE id = ?').bind(addedChars(before, r.body), r.id).run();
+    prev = { note: r.note_id, body: r.body };
+  }
+}
+
 const MAX_TITLE = 100;
 const MAX_BODY = 50000;
 const MAX_NOTE_IMAGES = 50;
@@ -40,7 +65,11 @@ function plain(md) {
 }
 
 export async function noteHelpsReceived(env, userId) {
-  const r = await env.DB.prepare('SELECT COALESCE(SUM(help_count), 0) AS n FROM notes WHERE user_id = ? AND deleted = 0').bind(userId).first();
+  const r = await env.DB.prepare(
+    `SELECT COUNT(*) AS n FROM note_helps h JOIN notes n ON n.id = h.note_id
+      WHERE n.deleted = 0 AND n.visibility = 'public' AND h.user_id != ?1
+        AND (n.user_id = ?1 OR (SELECT COALESCE(SUM(v.added), 0) FROM note_revisions v WHERE v.note_id = n.id AND v.user_id = ?1) >= ${CREDIT_MIN_CHARS})`
+  ).bind(userId).first();
   return r ? r.n : 0;
 }
 
@@ -121,8 +150,8 @@ export async function handleNotes(ctx) {
       'INSERT INTO notes (user_id, subject, title, body, visibility, rev, created_at, updated_at, last_editor_id, published_at) VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, ?)'
     ).bind(user.id, subject, title, body, vis, now, now, user.id, vis === 'public' ? now : 0).run();
     const id = res.meta.last_row_id;
-    await db.prepare('INSERT INTO note_revisions (note_id, rev, user_id, author_name, title, body, summary, created_at) VALUES (?, 1, ?, ?, ?, ?, ?, ?)')
-      .bind(id, user.id, nameFor(user), title, body, '처음 작성', now).run();
+    await db.prepare('INSERT INTO note_revisions (note_id, rev, user_id, author_name, title, body, summary, created_at, added) VALUES (?, 1, ?, ?, ?, ?, ?, ?, ?)')
+      .bind(id, user.id, nameFor(user), title, body, '처음 작성', now, addedChars('', body)).run();
     return json({ id, rev: 1 }, 201);
   }
 
@@ -146,7 +175,8 @@ export async function handleNotes(ctx) {
   // 노트 하나 보기
   if (parts.length === 2 && method === 'GET') {
     const lab = await labels();
-    const { results: revs } = await db.prepare('SELECT user_id, COUNT(*) AS c FROM note_revisions WHERE note_id = ? GROUP BY user_id').bind(id).all();
+    const { results: revs } = await db.prepare('SELECT user_id, COUNT(*) AS c, SUM(added) AS added FROM note_revisions WHERE note_id = ? GROUP BY user_id').bind(id).all();
+    const iContributed = revs.some((r) => r.user_id === user.id);
     const helped = await db.prepare('SELECT 1 AS x FROM note_helps WHERE user_id = ? AND note_id = ?').bind(user.id, id).first();
     if (note.visibility === 'public') {
       await db.prepare("UPDATE notifications SET read_at = ? WHERE user_id = ? AND kind = 'note_edit' AND post_id = ? AND read_at = 0").bind(now, user.id, id).run();
@@ -157,7 +187,12 @@ export async function handleNotes(ctx) {
         id, subject: note.subject, title: note.title, body: note.body, visibility: note.visibility, rev: note.rev,
         helps: note.help_count, helped: !!helped, createdAt: note.created_at, updatedAt: note.updated_at, mine,
         lastEditor: lab.get(note.last_editor_id || note.user_id) || '익명',
-        contributors: [...lab.entries()].map(([uid, name]) => ({ name, edits: revs.find((r) => r.user_id === uid)?.c || 0, me: uid === user.id, tag: user.is_admin ? tagOf(uid) : undefined, uid: user.is_admin ? uid : undefined })),
+        contributors: [...lab.entries()].map(([uid, name]) => {
+          const r = revs.find((x) => x.user_id === uid) || {};
+          return { name, edits: r.c || 0, added: r.added || 0, credited: uid === note.user_id || (r.added || 0) >= CREDIT_MIN_CHARS, author: uid === note.user_id, me: uid === user.id, tag: user.is_admin ? tagOf(uid) : undefined, uid: user.is_admin ? uid : undefined };
+        }),
+        canHelp: note.visibility === 'public' && !iContributed && !user.banned,
+        iContributed,
         tag: user.is_admin ? tagOf(note.user_id) : undefined, uid: user.is_admin ? note.user_id : undefined,
       },
       canEdit,
@@ -182,8 +217,8 @@ export async function handleNotes(ctx) {
     const upd = await db.prepare('UPDATE notes SET title = ?, body = ?, rev = ?, updated_at = ?, last_editor_id = ? WHERE id = ? AND rev = ?')
       .bind(title, body, rev, now, user.id, id, note.rev).run();
     if (!upd.meta.changes) return fail(409, '그사이 다른 사람이 이 정리를 고쳤어요. 다시 열어 주세요.');
-    await db.prepare('INSERT INTO note_revisions (note_id, rev, user_id, author_name, title, body, summary, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
-      .bind(id, rev, user.id, nameFor(user), title, body, cleanText(b.summary, 60) || null, now).run();
+    await db.prepare('INSERT INTO note_revisions (note_id, rev, user_id, author_name, title, body, summary, created_at, added) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
+      .bind(id, rev, user.id, nameFor(user), title, body, cleanText(b.summary, 60) || null, now, addedChars(note.body, body)).run();
     await db.prepare('UPDATE users SET last_post_at = ? WHERE id = ?').bind(now, user.id).run();
     // 공개 정리를 다른 사람이 고치면 작성자에게 알림 (안 읽은 알림이 있으면 시간만 새로)
     if (note.visibility === 'public' && note.user_id !== user.id) {
@@ -242,7 +277,8 @@ export async function handleNotes(ctx) {
     const upd = await db.prepare('UPDATE notes SET title = ?, body = ?, rev = ?, updated_at = ?, last_editor_id = ? WHERE id = ? AND rev = ?')
       .bind(r.title, r.body, rev, now, user.id, id, note.rev).run();
     if (!upd.meta.changes) return fail(409, '그사이 다른 사람이 고쳤어요. 다시 시도해 주세요.');
-    await db.prepare('INSERT INTO note_revisions (note_id, rev, user_id, author_name, title, body, summary, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+    // 되돌리기는 새로 쓴 글이 아니라서 '더한 글자'로 치지 않음
+    await db.prepare('INSERT INTO note_revisions (note_id, rev, user_id, author_name, title, body, summary, created_at, added) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)')
       .bind(id, rev, user.id, nameFor(user), r.title, r.body, `${r.rev}번 기록으로 되돌림`, now).run();
     return json({ id, rev });
   }
@@ -268,6 +304,8 @@ export async function handleNotes(ctx) {
     const banned = banGuard(); if (banned) return banned;
     if (note.visibility !== 'public') return fail(400, '공개 정리에만 누를 수 있어요.');
     if (mine) return fail(400, '내 정리에는 누를 수 없어요.');
+    const contributed = await db.prepare('SELECT 1 AS x FROM note_revisions WHERE note_id = ? AND user_id = ?').bind(id, user.id).first();
+    if (contributed) return fail(400, '함께 정리한 글에는 누를 수 없어요.');
     const had = await db.prepare('SELECT 1 AS x FROM note_helps WHERE user_id = ? AND note_id = ?').bind(user.id, id).first();
     if (had) {
       await db.prepare('DELETE FROM note_helps WHERE user_id = ? AND note_id = ?').bind(user.id, id).run();

@@ -1,7 +1,7 @@
 // 익명 라운지 API — Cloudflare Pages Functions
 // 필요한 설정: D1 바인딩 이름 DB, 환경 변수 INVITE_CODE(반 공용 코드), ADMIN_CODE(소유자 최초 등록용)
 import { b64urlToBytes, bytesToB64url, verifyRegistration, verifyAuthentication } from '../_lib/webauthn.js';
-import { NOTE_SCHEMA, handleNotes, noteHelpsReceived } from '../_lib/notes.js';
+import { NOTE_SCHEMA, handleNotes, noteHelpsReceived, migrateNotes } from '../_lib/notes.js';
 
 const CATS = ['질문', '잡담', '건의'];
 const TIERS = [
@@ -133,6 +133,7 @@ async function ensureSchema(env) {
         'CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications(user_id, created_at DESC)',
       ];
       for (const s of [...stmts, ...NOTE_SCHEMA]) await db.prepare(s).run();
+      await migrateNotes(db);
       const { results: cols } = await db.prepare('PRAGMA table_info(users)').all();
       const have = new Set(cols.map((c) => c.name));
       const add = [

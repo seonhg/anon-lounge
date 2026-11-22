@@ -1036,13 +1036,17 @@ async function noteView(id) {
   let d;
   try { d = await api(`/notes/${id}`); } catch (e) { app.replaceChildren(shell('notes', [h('a', { class: 'back', href: '#/notes' }, svg(ICON.back), '정리'), h('div', { class: 'card empty' }, e.message)])); return; }
   const { note: n } = d;
+  n.canHelp = d.note.canHelp; n.iContributed = d.note.iContributed;
   refreshAlerts();
   const act = (label, fn, cls = 'link-btn') => h('button', { type: 'button', class: cls, onclick: fn }, label);
   const setVis = async (pub) => {
     if (pub && !confirm('공개하면 다른 수강생이 이 정리를 보고 고칠 수 있어요. 고친 기록은 모두 남아요. 공개할까요?')) return;
     try { await api(`/notes/${id}/visibility`, { method: 'PATCH', body: { public: pub } }); toast(pub ? '공개 정리로 올렸어요' : '나만 보기로 바꿨어요'); noteView(id); } catch (e) { toast(e.message); }
   };
-  const help = h('button', { type: 'button', class: 'help', 'aria-pressed': n.helped ? 'true' : 'false', disabled: n.mine || n.visibility !== 'public' ? true : null, title: n.mine ? '내 정리에는 누를 수 없어요' : null },
+  const credited = n.contributors.filter((c) => c.credited);
+  const help = h('button', { type: 'button', class: 'help', 'aria-pressed': n.helped ? 'true' : 'false', disabled: n.canHelp ? null : true,
+    title: n.iContributed ? '함께 정리한 글에는 누를 수 없어요' : null,
+    'aria-label': `도움됐어요 ${n.helps}. 누르면 함께 정리한 ${credited.length}명이 모두 받아요` },
     svg(ICON.thumb, 14), `도움됐어요 ${n.helps}`);
   help.addEventListener('click', async () => {
     try { const r = await api(`/notes/${id}/help`, { method: 'POST' }); help.setAttribute('aria-pressed', r.helped ? 'true' : 'false'); help.lastChild.textContent = `도움됐어요 ${r.helps}`; } catch (e) { toast(e.message); }
@@ -1065,8 +1069,13 @@ async function noteView(id) {
       n.body ? renderMd(n.body) : h('p', { class: 'sub' }, '아직 내용이 없어요.'),
       h('div', { class: 'note-foot' },
         n.visibility === 'public' ? h('div', { class: 'contribs' }, h('span', { class: 'sub', style: 'margin:0;font-size:13px' }, '함께 정리한 사람'),
-          ...n.contributors.map((c) => h('span', { class: `contrib${c.me ? ' me' : ''}` }, c.name, h('small', {}, ` ${c.edits}번`), c.tag ? adminTag(c.tag, c.uid) : null))) : null,
-        n.visibility === 'public' ? help : null)),
+          ...n.contributors.map((c) => h('span', { class: `contrib${c.me ? ' me' : ''}${c.credited ? ' credited' : ''}`,
+            title: c.credited ? '이 정리의 도움됐어요를 함께 받아요' : `글을 ${20}자 이상 더하면 도움됐어요를 함께 받아요` },
+            c.credited ? h('span', { class: 'cr-mark', 'aria-label': '도움됐어요 받음' }, svg(ICON.thumb, 11)) : null,
+            c.name, h('small', {}, ` ${c.edits}번`), c.tag ? adminTag(c.tag, c.uid) : null))) : null,
+        n.visibility === 'public' ? h('div', { class: 'help-wrap' }, help,
+          h('div', { class: 'help-note' }, n.iContributed ? '함께 정리한 글이라 누를 수 없어요' : `누르면 함께 정리한 ${credited.length}명이 모두 받아요`)) : null),
+        n.visibility === 'public' ? h('p', { class: 'sub', style: 'margin:0;font-size:12.5px' }, '👍 표시가 있는 사람이 도움됐어요를 함께 받아요. 처음 쓴 사람과, 글을 20자 이상 더한 사람이에요 (오타 수정·되돌리기는 제외).') : null),
   ]));
 }
 
