@@ -88,7 +88,8 @@ CREATE TABLE IF NOT EXISTS answers (
   author_name TEXT,
   help_count  INTEGER NOT NULL DEFAULT 0,
   deleted     INTEGER NOT NULL DEFAULT 0,
-  created_at  INTEGER NOT NULL
+  created_at  INTEGER NOT NULL,
+  parent_id   INTEGER              -- 대댓글이면 맨 위 답변 id (한 단계까지만)
 );
 CREATE INDEX IF NOT EXISTS idx_answers_post ON answers(post_id, created_at);
 

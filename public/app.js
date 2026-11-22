@@ -69,6 +69,7 @@ const ICON = {
   pen: '<path d="M4 20h4L19 9l-4-4L4 16z"/><path d="M13.5 6.5l4 4"/>',
   bell: '<path d="M6 9a6 6 0 1 1 12 0c0 5 2 6.5 2 6.5H4S6 14 6 9z"/><path d="M10 19a2 2 0 0 0 4 0"/>',
   next: '<path d="M9 6l6 6-6 6"/>',
+  reply: '<path d="M9 14l-5-5 5-5"/><path d="M4 9h10a6 6 0 0 1 6 6v5"/>',
   shield: '<path d="M12 3l8 3v6c0 4.5-3.4 8.3-8 9-4.6-.7-8-4.5-8-9V6z"/><path d="M9 12l2 2 4-4"/>',
   key: '<circle cx="8" cy="15" r="4"/><path d="M11 12l9-9M17 6l3 3M15 8l2 2"/>',
 };
@@ -484,13 +485,52 @@ async function postView(id) {
     try { await api(`/${type === 'post' ? 'posts' : 'answers'}/${itemId}`, { method: 'DELETE' }); toast('지웠어요'); type === 'post' ? (location.hash = '#/') : postView(id); } catch (e) { toast(e.message); }
   } }, '지우기');
 
-  const ansList = h('ol', { class: 'answers', 'aria-label': '답변' },
-    ...answers.map((a) => h('li', { class: 'answer' },
-      h('div', { class: 'row' }, h('span', { class: `who${a.author === '익명(글쓴이)' ? ' op' : ''}` }, a.author, h('span', { style: 'font-weight:400;color:var(--muted);margin-left:6px' }, ago(a.createdAt)), adminTag(a.tag, a.uid)),
+  // 답변 + 그 아래 대댓글 (한 단계)
+  const tops = answers.filter((a) => !a.parentId);
+  const kids = (pid) => answers.filter((a) => a.parentId === pid);
+  const canWrite = !state.me.banned;
+  function replyBox(top, slot, replyTo) {
+    slot.querySelector('.reply-box')?.remove();
+    const root = h('div', { class: 'reply-box composer' });
+    const ta = h('textarea', { class: 'plain body-in', rows: '2', maxlength: '5000', placeholder: `${replyTo}에게 답글 (캡처는 Ctrl + V)`, 'aria-label': '대댓글 내용' });
+    const tray = imageTray(root);
+    const go = h('button', { class: 'btn sm', type: 'button' }, '답글 달기');
+    go.addEventListener('click', async () => {
+      if (!ta.value.trim() && !tray.count()) { ta.focus(); return; }
+      go.disabled = true;
+      try {
+        const { id: rid } = await api(`/posts/${id}/answers`, { method: 'POST', body: { body: ta.value, parentId: top.id, withImages: tray.count() } });
+        try { await uploadImages('answer', rid, tray.files()); toast('답글을 달았어요'); } catch (e) { toast(e.message); }
+        postView(id);
+      } catch (e) { toast(e.message); go.disabled = false; }
+    });
+    root.append(ta, tray.el, h('div', { class: 'comp-foot' }, h('span', { class: 'hint' }, state.me.showReal ? '실명으로 올라가요' : '익명으로 올라가요'),
+      h('button', { type: 'button', class: 'link-btn', onclick: () => root.remove() }, '취소'), go));
+    slot.append(root);
+    ta.focus();
+  }
+  function answerItem(a, top, slot, isReply) {
+    if (a.deleted) return h('li', { class: 'answer gone-answer' }, h('p', { class: 'body sub', style: 'margin:0' }, '삭제된 답변이에요.'));
+    return h('li', { class: `answer${isReply ? ' reply' : ''}` },
+      h('div', { class: 'row' }, h('span', { class: `who${a.author === '익명(글쓴이)' ? ' op' : ''}` },
+        isReply ? h('span', { class: 'reply-mark', 'aria-hidden': 'true' }, svg(ICON.reply, 14)) : null,
+        a.author, h('span', { style: 'font-weight:400;color:var(--muted);margin-left:6px' }, ago(a.createdAt)), adminTag(a.tag, a.uid)),
         (a.mine || canModerate) ? del('answer', a.id) : null),
       a.body ? h('p', { class: 'body' }, a.body) : null,
       pics(a.images),
-      h('div', { class: 'meta' }, helpButton('answer', a)))));
+      h('div', { class: 'meta' },
+        canWrite && !top.deleted ? h('button', { type: 'button', class: 'reply-btn', onclick: () => replyBox(top, slot, a.author) }, svg(ICON.reply, 14), '답글') : null,
+        helpButton('answer', a)));
+  }
+  const ansList = h('ol', { class: 'answers', 'aria-label': '답변' },
+    ...tops.map((t) => {
+      const slot = h('div', { class: 'reply-slot' });
+      const children = kids(t.id);
+      return h('li', { class: 'thread' },
+        h('ol', { class: 'answers' }, answerItem(t, t, slot, false)),
+        children.length ? h('ol', { class: 'answers replies', 'aria-label': '대댓글' }, ...children.map((c) => answerItem(c, t, slot, true))) : null,
+        slot);
+    }));
 
   const ansRoot = h('section', { class: 'card composer edge', 'aria-label': '답변 쓰기' });
   const ansBody = h('textarea', { class: 'plain body-in', rows: '3', maxlength: '5000', placeholder: '답변을 써주세요. 캡처는 Ctrl + V로 붙여넣어요.', 'aria-label': '답변 내용' });
@@ -518,7 +558,7 @@ async function postView(id) {
       post.body ? h('p', { class: 'body' }, post.body) : null,
       pics(post.images),
       h('div', { class: 'meta' }, helpButton('post', post)),
-      h('h3', { style: 'margin:8px 0 0;font-size:15px' }, `답변 ${answers.length}`),
+      h('h3', { style: 'margin:8px 0 0;font-size:15px' }, `답변 ${answers.filter((a) => !a.deleted).length}`),
       answers.length ? ansList : h('p', { class: 'sub', style: 'margin:0' }, '아직 답변이 없어요. 아는 만큼만 적어도 큰 도움이 돼요.')),
     state.me.banned ? bannedNote() : ansRoot,
   ]));
@@ -705,7 +745,7 @@ async function alertsView() {
     try { await api('/notifications/read', { method: 'POST' }); state.alerts = 0; alertsView(); } catch (e) { toast(e.message); }
   } }, '모두 읽음');
   app.replaceChildren(shell('alerts', [
-    h('header', { class: 'row', style: 'align-items:flex-end;flex-wrap:wrap' }, h('div', {}, h('h1', {}, '알림'), h('p', { class: 'sub' }, '내 글에 답변이 달리면 여기에 모여요.')), readAll),
+    h('header', { class: 'row', style: 'align-items:flex-end;flex-wrap:wrap' }, h('div', {}, h('h1', {}, '알림'), h('p', { class: 'sub' }, '내 글에 답변이, 내 답변에 대댓글이 달리면 여기에 모여요.')), readAll),
     list]));
   let data;
   try { data = await api('/notifications'); } catch (e) { list.replaceChildren(h('li', { class: 'card empty' }, e.message)); return; }
@@ -716,7 +756,7 @@ async function alertsView() {
     h('a', { class: `card item alert-item edge${n.read ? '' : ' new'}`, href: `#/post/${n.postId}` },
       h('span', { class: `unread-dot${n.read ? '' : ' on'}`, 'aria-label': n.read ? null : '안 읽음' }),
       h('div', { class: 'item-main' },
-        h('div', { class: 'alert-line' }, h('b', {}, '내 글에 새 답변'), h('span', { class: 'sub', style: 'margin:0;font-size:13px' }, ago(n.createdAt))),
+        h('div', { class: 'alert-line' }, h('b', {}, n.kind === 'reply' ? '내 답변에 대댓글' : '내 글에 새 답변'), h('span', { class: 'sub', style: 'margin:0;font-size:13px' }, ago(n.createdAt))),
         h('div', { class: 'item-title' }, n.postTitle),
         n.snippet ? h('div', { class: 'item-ex' }, `“${n.snippet}”`) : null)))));
 }
@@ -742,7 +782,7 @@ async function adminUserView(uid) {
           p.excerpt ? h('div', { class: 'item-ex' }, p.excerpt) : null,
           h('div', { class: 'meta' }, h('span', {}, `${p.realName ? `실명 ${p.realName} · ` : ''}${ago(p.createdAt)}`), h('span', {}, `답변 ${p.answers}`), h('span', {}, `도움 ${p.helps}`), imgTag(p.images)))))
       : d.answers.map((a) => h('li', { class: `card item edge${a.deleted ? ' gone' : ''}` }, h('div', { class: 'item-main' },
-          h('div', { class: 'item-tags' }, h('span', { class: 'tag' }, '답변'), delTag(a.deleted), a.postDeleted ? h('span', { class: 'tag del-tag' }, '원글 지움') : null),
+          h('div', { class: 'item-tags' }, h('span', { class: 'tag' }, a.isReply ? '대댓글' : '답변'), delTag(a.deleted), a.postDeleted ? h('span', { class: 'tag del-tag' }, '원글 지움') : null),
           h('div', { class: 'answer-body' }, a.excerpt || '(이미지만)'),
           h('div', { class: 'meta' },
             a.postDeleted ? h('span', {}, `원글: ${a.postTitle}`) : h('a', { href: `#/post/${a.postId}` }, `원글: ${a.postTitle}`),

@@ -143,6 +143,9 @@ async function ensureSchema(env) {
       for (const [name, type] of add) if (!have.has(name)) await db.prepare(`ALTER TABLE users ADD COLUMN ${name} ${type}`).run();
       const { results: pcols } = await db.prepare('PRAGMA table_info(posts)').all();
       if (!pcols.some((c) => c.name === 'edited_at')) await db.prepare('ALTER TABLE posts ADD COLUMN edited_at INTEGER NOT NULL DEFAULT 0').run();
+      const { results: acols } = await db.prepare('PRAGMA table_info(answers)').all();
+      if (!acols.some((c) => c.name === 'parent_id')) await db.prepare('ALTER TABLE answers ADD COLUMN parent_id INTEGER').run();
+      await db.prepare('CREATE INDEX IF NOT EXISTS idx_answers_parent ON answers(parent_id)').run();
       await db.prepare('CREATE INDEX IF NOT EXISTS idx_users_recovery ON users(recovery_hash)').run();
       // 예전 방식(사용자 1명 = 토큰 1개)으로 로그인해 있던 사람을 그대로 이어줌
       await db.prepare("INSERT OR IGNORE INTO sessions (token_hash, user_id, created_at, last_seen_at) SELECT token_hash, id, created_at, created_at FROM users WHERE token_hash IS NOT NULL AND token_hash NOT LIKE 'unused-%'").run();
@@ -412,7 +415,7 @@ export async function onRequest(context) {
              FROM posts p WHERE p.user_id = ? ORDER BY p.created_at DESC LIMIT 200`
         ).bind(target.id).all();
         const { results: answers } = await env.DB.prepare(
-          `SELECT a.id, a.post_id, substr(a.body, 1, 160) AS excerpt, a.author_name, a.help_count, a.deleted, a.created_at,
+          `SELECT a.id, a.post_id, a.parent_id, substr(a.body, 1, 160) AS excerpt, a.author_name, a.help_count, a.deleted, a.created_at,
                   p.title AS post_title, p.deleted AS post_deleted,
                   (SELECT COUNT(*) FROM images i WHERE i.owner_type = 'answer' AND i.owner_id = a.id) AS images
              FROM answers a JOIN posts p ON p.id = a.post_id WHERE a.user_id = ? ORDER BY a.created_at DESC LIMIT 200`
@@ -420,7 +423,7 @@ export async function onRequest(context) {
         return json({
           user: { id: target.id, tag: tagOf(target.id), isAdmin: !!target.is_admin, isOwner: !!target.is_owner, banned: !!target.banned, createdAt: target.created_at, lastSeenAt: target.last_seen_at, me: target.id === user.id },
           posts: posts.map((p) => ({ id: p.id, cat: p.cat, subject: p.subject, title: p.title, excerpt: p.excerpt, realName: p.author_name, answers: p.answer_count, helps: p.help_count, images: p.images, deleted: !!p.deleted, createdAt: p.created_at })),
-          answers: answers.map((a) => ({ id: a.id, postId: a.post_id, postTitle: a.post_title, postDeleted: !!a.post_deleted, excerpt: a.excerpt, realName: a.author_name, helps: a.help_count, images: a.images, deleted: !!a.deleted, createdAt: a.created_at })),
+          answers: answers.map((a) => ({ id: a.id, isReply: !!a.parent_id, postId: a.post_id, postTitle: a.post_title, postDeleted: !!a.post_deleted, excerpt: a.excerpt, realName: a.author_name, helps: a.help_count, images: a.images, deleted: !!a.deleted, createdAt: a.created_at })),
         });
       }
       if (parts[1] === 'users' && parts[2] && method === 'PATCH') {
@@ -557,7 +560,9 @@ export async function onRequest(context) {
       if (parts.length === 2 && method === 'GET') {
         const { results: answers } = await env.DB.prepare(
           `SELECT a.*, EXISTS (SELECT 1 FROM helps h WHERE h.user_id = ? AND h.target_type = 'answer' AND h.target_id = a.id) AS helped
-             FROM answers a WHERE a.post_id = ? AND a.deleted = 0 ORDER BY a.created_at`
+             FROM answers a WHERE a.post_id = ? AND (a.deleted = 0 OR (a.parent_id IS NULL AND EXISTS (
+                    SELECT 1 FROM answers c WHERE c.parent_id = a.id AND c.deleted = 0)))
+            ORDER BY a.created_at`
         ).bind(user.id, postId).all();
         const { results: imgs } = await env.DB.prepare(
           `SELECT id, owner_type, owner_id FROM images
@@ -583,10 +588,13 @@ export async function onRequest(context) {
             helped: !!helpedPost, mine: post.user_id === user.id, images: imagesOf('post', post.id), tag: adminTag(post.user_id), uid: adminUid(post.user_id),
             editedAt: post.edited_at || 0,
           },
-          answers: answers.map((a) => ({
-            id: a.id, body: a.body, author: label(a.user_id, a.author_name), createdAt: a.created_at,
-            helps: a.help_count, helped: !!a.helped, mine: a.user_id === user.id, images: imagesOf('answer', a.id), tag: adminTag(a.user_id), uid: adminUid(a.user_id),
-          })),
+          answers: answers.map((a) => (a.deleted
+            // 지운 답변 아래에 대댓글이 남아 있으면 자리만 남김
+            ? { id: a.id, parentId: null, deleted: true, body: '', author: '', createdAt: a.created_at, helps: 0, helped: false, mine: false, images: [] }
+            : {
+              id: a.id, parentId: a.parent_id || null, body: a.body, author: label(a.user_id, a.author_name), createdAt: a.created_at,
+              helps: a.help_count, helped: !!a.helped, mine: a.user_id === user.id, images: imagesOf('answer', a.id), tag: adminTag(a.user_id), uid: adminUid(a.user_id),
+            })),
           canModerate: !!user.is_admin,
           banned: !!user.banned,
         });
@@ -629,18 +637,28 @@ export async function onRequest(context) {
         if (!body && !(b.images || []).length && !b.withImages) return fail(400, '답변 내용을 써주세요.');
         let images;
         try { images = decodeImages(b.images); } catch (e) { return fail(400, e.message); }
-        const res = await env.DB.prepare('INSERT INTO answers (post_id, user_id, body, author_name, created_at) VALUES (?, ?, ?, ?, ?)')
-          .bind(postId, user.id, body, nameFor(user), now).run();
+        // 대댓글: 한 단계까지만. 대댓글에 다시 달면 같은 줄기(맨 위 답변) 아래로
+        let parent = null;
+        if (b.parentId !== undefined && b.parentId !== null) {
+          parent = await env.DB.prepare('SELECT id, user_id, parent_id, deleted FROM answers WHERE id = ? AND post_id = ?').bind(Number(b.parentId), postId).first();
+          if (parent && parent.parent_id) parent = await env.DB.prepare('SELECT id, user_id, parent_id, deleted FROM answers WHERE id = ?').bind(parent.parent_id).first();
+          if (!parent || parent.deleted) return fail(404, '답글을 달 답변을 찾을 수 없어요.');
+        }
+        const res = await env.DB.prepare('INSERT INTO answers (post_id, user_id, body, author_name, created_at, parent_id) VALUES (?, ?, ?, ?, ?, ?)')
+          .bind(postId, user.id, body, nameFor(user), now, parent ? parent.id : null).run();
         const answerId = res.meta.last_row_id;
         for (const img of images) {
           await env.DB.prepare('INSERT INTO images (owner_type, owner_id, mime, data, created_at) VALUES (?, ?, ?, ?, ?)')
             .bind('answer', answerId, img.mime, img.bytes, now).run();
         }
         await env.DB.prepare('UPDATE posts SET answer_count = answer_count + 1 WHERE id = ?').bind(postId).run();
-        // 글쓴이에게 알림 (내 글에 내가 단 답변은 빼고)
-        if (post.user_id !== user.id) {
-          await env.DB.prepare("INSERT INTO notifications (user_id, kind, post_id, answer_id, created_at) VALUES (?, 'answer', ?, ?, ?)")
-            .bind(post.user_id, postId, answerId, now).run();
+        // 알림: 대댓글이면 그 답변을 쓴 사람에게, 그리고 글쓴이에게 (본인 것은 빼고, 한 사람에게 한 번만)
+        const notify = new Map();
+        if (parent && parent.user_id !== user.id) notify.set(parent.user_id, 'reply');
+        if (post.user_id !== user.id && !notify.has(post.user_id)) notify.set(post.user_id, 'answer');
+        for (const [uid, kind] of notify) {
+          await env.DB.prepare('INSERT INTO notifications (user_id, kind, post_id, answer_id, created_at) VALUES (?, ?, ?, ?, ?)')
+            .bind(uid, kind, postId, answerId, now).run();
         }
         await env.DB.prepare('UPDATE users SET last_post_at = ? WHERE id = ?').bind(now, user.id).run();
         return json({ id: answerId }, 201);
