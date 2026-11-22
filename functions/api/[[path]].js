@@ -1,5 +1,6 @@
 // 익명 라운지 API — Cloudflare Pages Functions
-// 필요한 설정: D1 바인딩 이름 DB, 환경 변수 INVITE_CODE(반 공용 코드), ADMIN_CODE(운영자 코드)
+// 필요한 설정: D1 바인딩 이름 DB, 환경 변수 INVITE_CODE(반 공용 코드), ADMIN_CODE(소유자 최초 등록용)
+import { b64urlToBytes, bytesToB64url, verifyRegistration, verifyAuthentication } from '../_lib/webauthn.js';
 
 const CATS = ['질문', '잡담', '건의'];
 const TIERS = [
@@ -9,11 +10,14 @@ const TIERS = [
   { name: '플래티넘', min: 150 },
   { name: '다이아', min: 300 },
 ];
-const MAX_IMAGES = 3;
+const MAX_IMAGES = 20;          // 글·답변 하나당
+const MAX_INLINE_IMAGES = 3;    // 글 올릴 때 한 번에 같이 보내는 수 (나머지는 한 장씩 따로 올림)
 const MAX_IMAGE_BYTES = 400 * 1024;
 const IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/webp'];
 const POST_COOLDOWN_MS = 15 * 1000;
+const CHALLENGE_TTL_MS = 5 * 60 * 1000;
 const COOKIE = 'al_token';
+const RECOVERY_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // 헷갈리는 0/O, 1/I 뺌
 
 // ---------- 작은 도구들 ----------
 const json = (data, status = 200, headers = {}) =>
@@ -32,6 +36,13 @@ function randomHex(bytes) {
   crypto.getRandomValues(a);
   return [...a].map((b) => b.toString(16).padStart(2, '0')).join('');
 }
+function newRecoveryCode() {
+  const a = new Uint8Array(16);
+  crypto.getRandomValues(a);
+  const chars = [...a].map((b) => RECOVERY_ALPHABET[b % RECOVERY_ALPHABET.length]).join(''); // 32글자 → 편향 없음
+  return chars.match(/.{4}/g).join('-');
+}
+const normalizeRecovery = (code) => String(code || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
 function getCookie(request, name) {
   const raw = request.headers.get('cookie') || '';
   for (const part of raw.split(';')) {
@@ -58,7 +69,7 @@ function cleanText(v, max) {
 }
 function decodeImages(list) {
   if (!Array.isArray(list)) return [];
-  if (list.length > MAX_IMAGES) throw new Error(`이미지는 최대 ${MAX_IMAGES}장까지 올릴 수 있어요.`);
+  if (list.length > MAX_INLINE_IMAGES) throw new Error('이미지는 한 장씩 따로 올려 주세요.');
   return list.map((img) => {
     if (!img || !IMAGE_TYPES.includes(img.mime) || typeof img.data !== 'string') throw new Error('지원하지 않는 이미지 형식이에요.');
     const bin = atob(img.data);
@@ -69,41 +80,110 @@ function decodeImages(list) {
   });
 }
 async function readJson(request) {
-  try {
-    return await request.json();
-  } catch {
-    return {};
+  try { return await request.json(); } catch { return {}; }
+}
+const tagOf = (userId) => '#' + userId.slice(0, 6);
+
+// ---------- 스키마 자동 보강 (이미 운영 중인 DB도 그대로 씀) ----------
+let schemaReady = null;
+async function ensureSchema(env) {
+  if (!schemaReady) {
+    schemaReady = (async () => {
+      const db = env.DB;
+      const stmts = [
+        'CREATE TABLE IF NOT EXISTS sessions (token_hash TEXT PRIMARY KEY, user_id TEXT NOT NULL, created_at INTEGER NOT NULL, last_seen_at INTEGER NOT NULL)',
+        'CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id)',
+        'CREATE TABLE IF NOT EXISTS passkeys (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, public_key TEXT NOT NULL, alg INTEGER NOT NULL, sign_count INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL, last_used_at INTEGER NOT NULL DEFAULT 0)',
+        'CREATE INDEX IF NOT EXISTS idx_passkeys_user ON passkeys(user_id)',
+        'CREATE TABLE IF NOT EXISTS challenges (id TEXT PRIMARY KEY, challenge TEXT NOT NULL, kind TEXT NOT NULL, user_id TEXT, created_at INTEGER NOT NULL)',
+      ];
+      for (const s of stmts) await db.prepare(s).run();
+      const { results: cols } = await db.prepare('PRAGMA table_info(users)').all();
+      const have = new Set(cols.map((c) => c.name));
+      const add = [
+        ['is_owner', 'INTEGER NOT NULL DEFAULT 0'],
+        ['banned', 'INTEGER NOT NULL DEFAULT 0'],
+        ['recovery_hash', 'TEXT'],
+        ['last_seen_at', 'INTEGER NOT NULL DEFAULT 0'],
+      ];
+      for (const [name, type] of add) if (!have.has(name)) await db.prepare(`ALTER TABLE users ADD COLUMN ${name} ${type}`).run();
+      const { results: pcols } = await db.prepare('PRAGMA table_info(posts)').all();
+      if (!pcols.some((c) => c.name === 'edited_at')) await db.prepare('ALTER TABLE posts ADD COLUMN edited_at INTEGER NOT NULL DEFAULT 0').run();
+      await db.prepare('CREATE INDEX IF NOT EXISTS idx_users_recovery ON users(recovery_hash)').run();
+      // 예전 방식(사용자 1명 = 토큰 1개)으로 로그인해 있던 사람을 그대로 이어줌
+      await db.prepare("INSERT OR IGNORE INTO sessions (token_hash, user_id, created_at, last_seen_at) SELECT token_hash, id, created_at, created_at FROM users WHERE token_hash IS NOT NULL AND token_hash NOT LIKE 'unused-%'").run();
+      await db.prepare("UPDATE users SET token_hash = 'unused-' || id WHERE token_hash IS NOT NULL AND token_hash NOT LIKE 'unused-%'").run();
+      // 소유자가 없으면 가장 먼저 들어온 운영자를 소유자로
+      const owner = await db.prepare('SELECT 1 AS x FROM users WHERE is_owner = 1').first();
+      if (!owner) await db.prepare('UPDATE users SET is_owner = 1 WHERE id = (SELECT id FROM users WHERE is_admin = 1 ORDER BY created_at LIMIT 1)').run();
+    })().catch((e) => { schemaReady = null; throw e; });
   }
+  return schemaReady;
 }
 
 // ---------- 인증 ----------
 async function currentUser(env, request) {
   const token = getCookie(request, COOKIE);
   if (!token) return null;
-  return env.DB.prepare('SELECT * FROM users WHERE token_hash = ?').bind(await sha256(token)).first();
+  const h = await sha256(token);
+  const user = await env.DB.prepare('SELECT u.*, s.token_hash AS session_hash, s.last_seen_at AS session_seen FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token_hash = ?').bind(h).first();
+  if (user && Date.now() - user.session_seen > 10 * 60 * 1000) {
+    const now = Date.now();
+    await env.DB.prepare('UPDATE sessions SET last_seen_at = ? WHERE token_hash = ?').bind(now, h).run();
+    await env.DB.prepare('UPDATE users SET last_seen_at = ? WHERE id = ?').bind(now, user.id).run();
+  }
+  return user;
 }
-function sessionCookie(token, request) {
-  const secure = new URL(request.url).protocol === 'https:' ? '; Secure' : '';
-  return `${COOKIE}=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=31536000${secure}`;
+function cookieFlags(request) {
+  return new URL(request.url).protocol === 'https:' ? '; Secure' : '';
+}
+async function startSession(env, request, userId) {
+  const token = randomHex(32);
+  const now = Date.now();
+  await env.DB.prepare('INSERT INTO sessions (token_hash, user_id, created_at, last_seen_at) VALUES (?, ?, ?, ?)').bind(await sha256(token), userId, now, now).run();
+  await env.DB.prepare('UPDATE users SET last_seen_at = ? WHERE id = ?').bind(now, userId).run();
+  return `${COOKIE}=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=31536000${cookieFlags(request)}`;
 }
 async function receivedHelps(env, userId) {
   const row = await env.DB.prepare(
-    `SELECT
-       (SELECT COALESCE(SUM(help_count), 0) FROM posts WHERE user_id = ?1 AND deleted = 0) +
-       (SELECT COALESCE(SUM(help_count), 0) FROM answers WHERE user_id = ?1 AND deleted = 0) AS n`
+    `SELECT (SELECT COALESCE(SUM(help_count), 0) FROM posts WHERE user_id = ?1 AND deleted = 0) +
+            (SELECT COALESCE(SUM(help_count), 0) FROM answers WHERE user_id = ?1 AND deleted = 0) AS n`
   ).bind(userId).first();
   return row ? row.n : 0;
 }
 async function meView(env, user) {
+  const pk = await env.DB.prepare('SELECT COUNT(*) AS n FROM passkeys WHERE user_id = ?').bind(user.id).first();
   return {
     mySubject: user.my_subject,
     isAdmin: !!user.is_admin,
+    isOwner: !!user.is_owner,
+    banned: !!user.banned,
+    hasRecovery: !!user.recovery_hash,
+    passkeys: pk ? pk.n : 0,
     realName: user.real_name || '',
     showReal: !!user.show_real,
     tier: tierOf(await receivedHelps(env, user.id)),
   };
 }
 const nameFor = (user) => (user.show_real && user.real_name ? user.real_name : null);
+const rpInfo = (request) => { const u = new URL(request.url); return { origin: u.origin, rpId: u.hostname }; };
+
+async function newChallenge(env, kind, userId) {
+  await env.DB.prepare('DELETE FROM challenges WHERE created_at < ?').bind(Date.now() - CHALLENGE_TTL_MS).run();
+  const id = randomHex(12);
+  const bytes = new Uint8Array(32);
+  crypto.getRandomValues(bytes);
+  const challenge = bytesToB64url(bytes);
+  await env.DB.prepare('INSERT INTO challenges (id, challenge, kind, user_id, created_at) VALUES (?, ?, ?, ?, ?)').bind(id, challenge, kind, userId || null, Date.now()).run();
+  return { id, challenge };
+}
+async function takeChallenge(env, id, kind) {
+  const row = await env.DB.prepare('SELECT * FROM challenges WHERE id = ? AND kind = ?').bind(String(id || ''), kind).first();
+  if (!row) return null;
+  await env.DB.prepare('DELETE FROM challenges WHERE id = ?').bind(row.id).run();
+  if (Date.now() - row.created_at > CHALLENGE_TTL_MS) return null;
+  return row;
+}
 
 // ---------- 라우터 ----------
 export async function onRequest(context) {
@@ -113,21 +193,77 @@ export async function onRequest(context) {
   const method = request.method;
 
   try {
-    // 입장 (초대 코드)
+    await ensureSchema(env);
+
+    // ===== 로그인 없이 쓰는 주소 =====
+    // 처음 입장 (초대 코드). ADMIN_CODE는 소유자가 아직 없을 때 한 번만 통함
     if (parts[0] === 'join' && method === 'POST') {
       const { code } = await readJson(request);
-      const isAdmin = env.ADMIN_CODE && safeEqual(String(code || ''), env.ADMIN_CODE);
-      if (!isAdmin && !(env.INVITE_CODE && safeEqual(String(code || ''), env.INVITE_CODE))) return fail(403, '초대 코드가 맞지 않아요.');
-      const token = randomHex(32);
+      const c = String(code || '').trim();
+      let isAdmin = false;
+      if (env.ADMIN_CODE && safeEqual(c, env.ADMIN_CODE)) {
+        const owner = await env.DB.prepare('SELECT 1 AS x FROM users WHERE is_owner = 1').first();
+        if (owner) return fail(403, '운영자 코드는 처음 한 번만 쓸 수 있어요. 운영자는 소유자가 지정해요.');
+        isAdmin = true;
+      } else if (!(env.INVITE_CODE && safeEqual(c, env.INVITE_CODE))) {
+        return fail(403, '초대 코드가 맞지 않아요.');
+      }
       const id = randomHex(12);
-      await env.DB.prepare('INSERT INTO users (id, token_hash, is_admin, created_at) VALUES (?, ?, ?, ?)')
-        .bind(id, await sha256(token), isAdmin ? 1 : 0, Date.now()).run();
+      const recovery = newRecoveryCode();
+      await env.DB.prepare('INSERT INTO users (id, token_hash, is_admin, is_owner, recovery_hash, created_at) VALUES (?, ?, ?, ?, ?, ?)')
+        .bind(id, 'unused-' + id, isAdmin ? 1 : 0, isAdmin ? 1 : 0, await sha256(normalizeRecovery(recovery)), Date.now()).run();
+      const cookie = await startSession(env, request, id);
       const user = await env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(id).first();
-      return json(await meView(env, user), 200, { 'set-cookie': sessionCookie(token, request) });
+      return json({ ...(await meView(env, user)), recoveryCode: recovery }, 200, { 'set-cookie': cookie });
     }
 
+    // 복구 코드로 다른 기기에서 들어오기
+    if (parts[0] === 'recover' && method === 'POST') {
+      const { code } = await readJson(request);
+      const norm = normalizeRecovery(code);
+      if (norm.length !== 16) return fail(400, '복구 코드는 16글자예요. (예: ABCD-EFGH-JKLM-NPQR)');
+      const user = await env.DB.prepare('SELECT * FROM users WHERE recovery_hash = ?').bind(await sha256(norm)).first();
+      if (!user) return fail(403, '복구 코드가 맞지 않아요.');
+      const cookie = await startSession(env, request, user.id);
+      return json(await meView(env, user), 200, { 'set-cookie': cookie });
+    }
+
+    // 패스키로 들어오기
+    if (parts[0] === 'passkey' && parts[1] === 'login' && method === 'POST') {
+      const { rpId, origin } = rpInfo(request);
+      if (parts[2] === 'options') {
+        const ch = await newChallenge(env, 'auth');
+        return json({ challengeId: ch.id, challenge: ch.challenge, rpId, timeout: 60000, userVerification: 'preferred' });
+      }
+      if (parts[2] === 'verify') {
+        const b = await readJson(request);
+        const ch = await takeChallenge(env, b.challengeId, 'auth');
+        if (!ch) return fail(400, '인증 요청이 만료됐어요. 다시 시도해 주세요.');
+        const pk = await env.DB.prepare('SELECT * FROM passkeys WHERE id = ?').bind(String(b.rawId || '')).first();
+        if (!pk) return fail(403, '이 사이트에 등록된 패스키가 아니에요.');
+        try {
+          const r = await verifyAuthentication(
+            { clientDataJSON: b64urlToBytes(b.clientDataJSON), authenticatorData: b64urlToBytes(b.authenticatorData), signature: b64urlToBytes(b.signature) },
+            { challenge: ch.challenge, origin, rpId, alg: pk.alg, jwk: JSON.parse(pk.public_key), storedCount: pk.sign_count }
+          );
+          await env.DB.prepare('UPDATE passkeys SET sign_count = ?, last_used_at = ? WHERE id = ?').bind(r.signCount, Date.now(), pk.id).run();
+        } catch (e) {
+          return fail(403, e.message);
+        }
+        const user = await env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(pk.user_id).first();
+        const cookie = await startSession(env, request, user.id);
+        return json(await meView(env, user), 200, { 'set-cookie': cookie });
+      }
+    }
+
+    // ===== 여기부터는 로그인 필요 =====
     const user = await currentUser(env, request);
-    if (!user) return fail(401, '먼저 초대 코드로 들어와 주세요.');
+    if (!user) return fail(401, '먼저 들어와 주세요.');
+
+    if (parts[0] === 'logout' && method === 'POST') {
+      await env.DB.prepare('DELETE FROM sessions WHERE token_hash = ?').bind(user.session_hash).run();
+      return json({ ok: true }, 200, { 'set-cookie': `${COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0${cookieFlags(request)}` });
+    }
 
     // 내 정보
     if (parts[0] === 'me' && parts.length === 1) {
@@ -141,6 +277,102 @@ export async function onRequest(context) {
           .bind(subject, realName || null, showReal, user.id).run();
         const u = await env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(user.id).first();
         return json(await meView(env, u));
+      }
+    }
+    // 복구 코드 새로 만들기 (예전 코드는 바로 못 씀)
+    if (parts[0] === 'me' && parts[1] === 'recovery' && method === 'POST') {
+      const code = newRecoveryCode();
+      await env.DB.prepare('UPDATE users SET recovery_hash = ? WHERE id = ?').bind(await sha256(normalizeRecovery(code)), user.id).run();
+      return json({ recoveryCode: code });
+    }
+
+    // 패스키 등록·목록·삭제
+    if (parts[0] === 'passkey' && parts[1] === 'register' && method === 'POST') {
+      const { rpId, origin } = rpInfo(request);
+      if (parts[2] === 'options') {
+        const ch = await newChallenge(env, 'reg', user.id);
+        const { results: existing } = await env.DB.prepare('SELECT id FROM passkeys WHERE user_id = ?').bind(user.id).all();
+        return json({
+          challengeId: ch.id,
+          publicKey: {
+            challenge: ch.challenge,
+            rp: { name: '익명 라운지', id: rpId },
+            user: { id: bytesToB64url(new TextEncoder().encode(user.id)), name: `익명 라운지 ${tagOf(user.id)}`, displayName: '익명 라운지' },
+            pubKeyCredParams: [{ type: 'public-key', alg: -7 }, { type: 'public-key', alg: -257 }],
+            authenticatorSelection: { residentKey: 'required', requireResidentKey: true, userVerification: 'preferred' },
+            attestation: 'none',
+            timeout: 60000,
+            excludeCredentials: existing.map((p) => ({ type: 'public-key', id: p.id })),
+          },
+        });
+      }
+      if (parts[2] === 'verify') {
+        const b = await readJson(request);
+        const ch = await takeChallenge(env, b.challengeId, 'reg');
+        if (!ch || ch.user_id !== user.id) return fail(400, '등록 요청이 만료됐어요. 다시 시도해 주세요.');
+        let r;
+        try {
+          r = await verifyRegistration(
+            { clientDataJSON: b64urlToBytes(b.clientDataJSON), attestationObject: b64urlToBytes(b.attestationObject) },
+            { challenge: ch.challenge, origin, rpId }
+          );
+        } catch (e) {
+          return fail(400, e.message);
+        }
+        await env.DB.prepare('INSERT INTO passkeys (id, user_id, public_key, alg, sign_count, created_at) VALUES (?, ?, ?, ?, ?, ?)')
+          .bind(r.credentialId, user.id, JSON.stringify(r.jwk), r.alg, r.signCount, Date.now()).run();
+        return json({ ok: true }, 201);
+      }
+    }
+    if (parts[0] === 'passkeys') {
+      if (method === 'GET' && parts.length === 1) {
+        const { results } = await env.DB.prepare('SELECT id, created_at, last_used_at FROM passkeys WHERE user_id = ? ORDER BY created_at').bind(user.id).all();
+        return json({ passkeys: results.map((p) => ({ id: p.id, createdAt: p.created_at, lastUsedAt: p.last_used_at })) });
+      }
+      if (method === 'DELETE' && parts[1]) {
+        await env.DB.prepare('DELETE FROM passkeys WHERE id = ? AND user_id = ?').bind(parts[1], user.id).run();
+        return json({ ok: true });
+      }
+    }
+
+    // 운영자 화면
+    if (parts[0] === 'admin') {
+      if (!user.is_admin) return fail(403, '운영자만 볼 수 있어요.');
+      if (parts[1] === 'users' && parts.length === 2 && method === 'GET') {
+        const { results } = await env.DB.prepare(
+          `SELECT u.id, u.is_admin, u.is_owner, u.banned, u.created_at, u.last_seen_at, u.recovery_hash IS NOT NULL AS has_recovery,
+                  (SELECT COUNT(*) FROM posts p WHERE p.user_id = u.id AND p.deleted = 0) AS posts,
+                  (SELECT COUNT(*) FROM answers a WHERE a.user_id = u.id AND a.deleted = 0) AS answers,
+                  (SELECT COALESCE(SUM(help_count), 0) FROM posts p WHERE p.user_id = u.id AND p.deleted = 0) +
+                  (SELECT COALESCE(SUM(help_count), 0) FROM answers a WHERE a.user_id = u.id AND a.deleted = 0) AS helps,
+                  (SELECT COUNT(*) FROM passkeys k WHERE k.user_id = u.id) AS passkeys
+             FROM users u ORDER BY u.is_owner DESC, u.is_admin DESC, u.last_seen_at DESC LIMIT 500`
+        ).all();
+        return json({
+          users: results.map((u) => ({
+            id: u.id, tag: tagOf(u.id), isAdmin: !!u.is_admin, isOwner: !!u.is_owner, banned: !!u.banned, me: u.id === user.id,
+            createdAt: u.created_at, lastSeenAt: u.last_seen_at, posts: u.posts, answers: u.answers, helps: u.helps,
+            hasRecovery: !!u.has_recovery, passkeys: u.passkeys,
+          })),
+          canAssignAdmins: !!user.is_owner,
+        });
+      }
+      if (parts[1] === 'users' && parts[2] && method === 'PATCH') {
+        const target = await env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(parts[2]).first();
+        if (!target) return fail(404, '사용자를 찾을 수 없어요.');
+        if (target.id === user.id) return fail(400, '나 자신은 바꿀 수 없어요.');
+        if (target.is_owner) return fail(403, '소유자는 바꿀 수 없어요.');
+        const b = await readJson(request);
+        if (b.admin !== undefined) {
+          if (!user.is_owner) return fail(403, '운영자 지정은 소유자만 할 수 있어요.');
+          await env.DB.prepare('UPDATE users SET is_admin = ? WHERE id = ?').bind(b.admin ? 1 : 0, target.id).run();
+        }
+        if (b.banned !== undefined) {
+          if (target.is_admin && !user.is_owner) return fail(403, '운영자는 소유자만 차단할 수 있어요.');
+          await env.DB.prepare('UPDATE users SET banned = ? WHERE id = ?').bind(b.banned ? 1 : 0, target.id).run();
+          if (b.banned) await env.DB.prepare('UPDATE users SET is_admin = 0 WHERE id = ?').bind(target.id).run();
+        }
+        return json({ ok: true });
       }
     }
 
@@ -159,6 +391,8 @@ export async function onRequest(context) {
       return json({ unread });
     }
 
+    const banGuard = () => (user.banned ? json({ error: '운영자가 글쓰기를 제한했어요. 글은 계속 읽을 수 있어요.', banned: true }, 403) : null);
+
     // 글 목록 / 글쓰기
     if (parts[0] === 'posts' && parts.length === 1) {
       if (method === 'GET') {
@@ -173,18 +407,20 @@ export async function onRequest(context) {
         if (subject) { where.push("(p.subject = ? OR p.cat = '건의')"); args.push(subject); }
         if (CATS.includes(cat)) { where.push('p.cat = ?'); args.push(cat); }
         const { results } = await env.DB.prepare(
-          `SELECT p.id, p.cat, p.subject, p.title, substr(p.body, 1, 120) AS excerpt, p.author_name,
+          `SELECT p.id, p.user_id, p.cat, p.subject, p.title, substr(p.body, 1, 120) AS excerpt, p.author_name,
                   p.answer_count, p.help_count, p.created_at, (p.user_id = ?1) AS mine,
                   EXISTS (SELECT 1 FROM helps h WHERE h.user_id = ?1 AND h.target_type = 'post' AND h.target_id = p.id) AS helped,
-                  (SELECT i.id FROM images i WHERE i.owner_type = 'post' AND i.owner_id = p.id ORDER BY i.id LIMIT 1) AS thumb_id
+                  (SELECT i.id FROM images i WHERE i.owner_type = 'post' AND i.owner_id = p.id ORDER BY i.id LIMIT 1) AS thumb_id,
+                  (SELECT COUNT(*) FROM images i WHERE i.owner_type = 'post' AND i.owner_id = p.id) AS image_count
              FROM posts p WHERE ${where.join(' AND ')}
             ORDER BY p.created_at DESC LIMIT 100`
         ).bind(...args).all();
         const posts = results.map((p) => ({
           id: p.id, cat: p.cat, subject: p.subject, title: p.title, excerpt: p.excerpt,
           author: p.author_name || '익명', answers: p.answer_count, helps: p.help_count, createdAt: p.created_at,
-          mine: !!p.mine, helped: !!p.helped, hasImage: !!p.thumb_id, thumb: p.thumb_id ? `/api/images/${p.thumb_id}` : null,
+          mine: !!p.mine, helped: !!p.helped, hasImage: !!p.thumb_id, imageCount: p.image_count, thumb: p.thumb_id ? `/api/images/${p.thumb_id}` : null,
           unread: seen !== null && !p.mine && p.created_at > seen,
+          tag: user.is_admin ? tagOf(p.user_id) : undefined,
         }));
         if (subject) {
           await env.DB.prepare(
@@ -194,6 +430,7 @@ export async function onRequest(context) {
         return json({ posts });
       }
       if (method === 'POST') {
+        const banned = banGuard(); if (banned) return banned;
         const b = await readJson(request);
         const now = Date.now();
         if (now - user.last_post_at < POST_COOLDOWN_MS) return fail(429, '조금만 있다가 다시 올려주세요.');
@@ -236,7 +473,6 @@ export async function onRequest(context) {
                OR (owner_type = 'answer' AND owner_id IN (SELECT id FROM answers WHERE post_id = ? AND deleted = 0))`
         ).bind(postId, postId).all();
         const helpedPost = await env.DB.prepare("SELECT 1 AS x FROM helps WHERE user_id = ? AND target_type = 'post' AND target_id = ?").bind(user.id, postId).first();
-        // 에브리타임처럼: 글 안에서 같은 사람은 같은 번호
         const numbers = new Map();
         const label = (uid, name) => {
           if (name) return name;
@@ -245,18 +481,45 @@ export async function onRequest(context) {
           return `익명${numbers.get(uid)}`;
         };
         const imagesOf = (type, id) => imgs.filter((i) => i.owner_type === type && i.owner_id === id).map((i) => `/api/images/${i.id}`);
+        const adminTag = (uid) => (user.is_admin ? tagOf(uid) : undefined);
         return json({
           post: {
             id: post.id, cat: post.cat, subject: post.subject, title: post.title, body: post.body,
             author: post.author_name || '익명', createdAt: post.created_at, helps: post.help_count,
-            helped: !!helpedPost, mine: post.user_id === user.id, images: imagesOf('post', post.id),
+            helped: !!helpedPost, mine: post.user_id === user.id, images: imagesOf('post', post.id), tag: adminTag(post.user_id),
+            editedAt: post.edited_at || 0,
           },
           answers: answers.map((a) => ({
             id: a.id, body: a.body, author: label(a.user_id, a.author_name), createdAt: a.created_at,
-            helps: a.help_count, helped: !!a.helped, mine: a.user_id === user.id, images: imagesOf('answer', a.id),
+            helps: a.help_count, helped: !!a.helped, mine: a.user_id === user.id, images: imagesOf('answer', a.id), tag: adminTag(a.user_id),
           })),
           canModerate: !!user.is_admin,
+          banned: !!user.banned,
         });
+      }
+      // 글 고치기: 글쓴이는 전부, 운영자는 말머리·과목만 (잘못 올린 글 옮기기)
+      if (parts.length === 2 && method === 'PATCH') {
+        const mine = post.user_id === user.id;
+        if (!mine && !user.is_admin) return fail(403, '고칠 수 없는 글이에요.');
+        if (mine) { const banned = banGuard(); if (banned) return banned; }
+        const b = await readJson(request);
+        const cat = b.cat === undefined ? post.cat : CATS.includes(b.cat) ? b.cat : null;
+        if (!cat) return fail(400, '말머리를 골라주세요.');
+        let subject = b.subject === undefined ? post.subject : Number(b.subject);
+        if (cat === '건의') subject = 0;
+        else if (!(subject >= 1 && subject <= 16)) return fail(400, '과목을 골라주세요.');
+        let title = post.title, body = post.body;
+        if (mine) {
+          if (b.title !== undefined) title = cleanText(b.title, 100);
+          if (b.body !== undefined) body = cleanText(b.body, 5000);
+          if (!title) return fail(400, '제목을 써주세요.');
+        } else if (b.title !== undefined || b.body !== undefined) {
+          return fail(403, '운영자는 말머리와 과목만 옮길 수 있어요.');
+        }
+        const textChanged = title !== post.title || body !== post.body;
+        await env.DB.prepare('UPDATE posts SET cat = ?, subject = ?, title = ?, body = ?, edited_at = ? WHERE id = ?')
+          .bind(cat, subject, title, body, textChanged ? Date.now() : post.edited_at || 0, postId).run();
+        return json({ ok: true });
       }
       if (parts.length === 2 && method === 'DELETE') {
         if (post.user_id !== user.id && !user.is_admin) return fail(403, '지울 수 없는 글이에요.');
@@ -264,11 +527,12 @@ export async function onRequest(context) {
         return json({ ok: true });
       }
       if (parts[2] === 'answers' && method === 'POST') {
+        const banned = banGuard(); if (banned) return banned;
         const b = await readJson(request);
         const now = Date.now();
         if (now - user.last_post_at < POST_COOLDOWN_MS / 3) return fail(429, '조금만 있다가 다시 올려주세요.');
         const body = cleanText(b.body, 5000);
-        if (!body && !(b.images || []).length) return fail(400, '답변 내용을 써주세요.');
+        if (!body && !(b.images || []).length && !b.withImages) return fail(400, '답변 내용을 써주세요.');
         let images;
         try { images = decodeImages(b.images); } catch (e) { return fail(400, e.message); }
         const res = await env.DB.prepare('INSERT INTO answers (post_id, user_id, body, author_name, created_at) VALUES (?, ?, ?, ?, ?)')
@@ -294,8 +558,9 @@ export async function onRequest(context) {
       return json({ ok: true });
     }
 
-    // 도움됐어요 (누르면 켜지고, 다시 누르면 꺼짐)
+    // 도움됐어요
     if (parts[0] === 'help' && method === 'POST') {
+      const banned = banGuard(); if (banned) return banned;
       const { type, id } = await readJson(request);
       if (!['post', 'answer'].includes(type)) return fail(400, '잘못된 요청이에요.');
       const table = type === 'post' ? 'posts' : 'answers';
@@ -314,11 +579,41 @@ export async function onRequest(context) {
       return json({ helped: !had, helps: after.help_count });
     }
 
+    // 이미지 한 장 올리기: POST /api/images?type=post|answer&id=N, 본문은 이미지 파일 그대로
+    if (parts[0] === 'images' && parts.length === 1 && method === 'POST') {
+      const banned = banGuard(); if (banned) return banned;
+      const type = url.searchParams.get('type');
+      const ownerId = Number(url.searchParams.get('id'));
+      if (!['post', 'answer'].includes(type)) return fail(400, '잘못된 요청이에요.');
+      const owner = await env.DB.prepare(`SELECT id, user_id FROM ${type === 'post' ? 'posts' : 'answers'} WHERE id = ? AND deleted = 0`).bind(ownerId).first();
+      if (!owner) return fail(404, '글을 찾을 수 없어요.');
+      if (owner.user_id !== user.id) return fail(403, '내 글에만 이미지를 올릴 수 있어요.');
+      const mime = (request.headers.get('content-type') || '').split(';')[0].trim();
+      if (!IMAGE_TYPES.includes(mime)) return fail(400, '지원하지 않는 이미지 형식이에요.');
+      const bytes = new Uint8Array(await request.arrayBuffer());
+      if (!bytes.length) return fail(400, '빈 이미지예요.');
+      if (bytes.length > MAX_IMAGE_BYTES) return fail(400, '이미지가 너무 커요. 400KB 이하로 줄여주세요.');
+      const cnt = await env.DB.prepare('SELECT COUNT(*) AS n FROM images WHERE owner_type = ? AND owner_id = ?').bind(type, ownerId).first();
+      if (cnt.n >= MAX_IMAGES) return fail(400, `이미지는 ${MAX_IMAGES}장까지예요.`);
+      const res = await env.DB.prepare('INSERT INTO images (owner_type, owner_id, mime, data, created_at) VALUES (?, ?, ?, ?, ?)')
+        .bind(type, ownerId, mime, bytes, Date.now()).run();
+      return json({ id: res.meta.last_row_id, url: `/api/images/${res.meta.last_row_id}` }, 201);
+    }
+    // 이미지 빼기 (글쓴이 또는 운영자)
+    if (parts[0] === 'images' && parts[1] && method === 'DELETE') {
+      const img = await env.DB.prepare('SELECT id, owner_type, owner_id FROM images WHERE id = ?').bind(Number(parts[1])).first();
+      if (!img) return fail(404, '이미지가 없어요.');
+      const owner = await env.DB.prepare(`SELECT user_id FROM ${img.owner_type === 'post' ? 'posts' : 'answers'} WHERE id = ?`).bind(img.owner_id).first();
+      if (!owner || (owner.user_id !== user.id && !user.is_admin)) return fail(403, '뺄 수 없는 이미지예요.');
+      await env.DB.prepare('DELETE FROM images WHERE id = ?').bind(img.id).run();
+      return json({ ok: true });
+    }
+
     // 이미지 보기 (들어온 사람만)
     if (parts[0] === 'images' && parts[1] && method === 'GET') {
       const img = await env.DB.prepare('SELECT mime, data FROM images WHERE id = ?').bind(Number(parts[1])).first();
       if (!img) return fail(404, '이미지가 없어요.');
-      const bytes = img.data instanceof ArrayBuffer ? new Uint8Array(img.data) : new Uint8Array(img.data);
+      const bytes = new Uint8Array(img.data);
       return new Response(bytes, { headers: { 'content-type': img.mime, 'cache-control': 'private, max-age=86400', 'x-content-type-options': 'nosniff' } });
     }
 
