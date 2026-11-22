@@ -13,6 +13,20 @@ const MAX_IMAGES = 20; // 글·답변 하나당
 const MAX_BYTES = 400 * 1024;
 
 const app = document.getElementById('app');
+
+// ---------- 화면 테마 (라이트 / 다크 / 기기 설정 따라가기) ----------
+const themePref = () => { try { return localStorage.getItem('al-theme') || 'light'; } catch { return 'light'; } };
+const darkMQ = matchMedia('(prefers-color-scheme: dark)');
+function applyTheme() {
+  const pref = themePref();
+  const t = pref === 'system' ? (darkMQ.matches ? 'dark' : 'light') : pref;
+  document.documentElement.dataset.theme = t;
+  document.querySelector('meta[name=theme-color]')?.setAttribute('content', t === 'dark' ? '#0A0920' : '#F5F3FF');
+  return t;
+}
+function setTheme(pref) { try { localStorage.setItem('al-theme', pref); } catch {} applyTheme(); }
+darkMQ.addEventListener?.('change', () => themePref() === 'system' && applyTheme());
+applyTheme();
 const state = { me: null, unread: {}, subject: null, cat: '전체' };
 
 // ---------- 도구 ----------
@@ -50,6 +64,9 @@ const ICON = {
   img: '<rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="9" cy="10" r="2"/><path d="M21 16l-5-5-8 8"/>',
   x: '<path d="M6 6l12 12M18 6L6 18"/>',
   back: '<path d="M15 6l-6 6 6 6"/>',
+  sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>',
+  moon: '<path d="M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5z"/>',
+  pen: '<path d="M4 20h4L19 9l-4-4L4 16z"/><path d="M13.5 6.5l4 4"/>',
   shield: '<path d="M12 3l8 3v6c0 4.5-3.4 8.3-8 9-4.6-.7-8-4.5-8-9V6z"/><path d="M9 12l2 2 4-4"/>',
   key: '<circle cx="8" cy="15" r="4"/><path d="M11 12l9-9M17 6l3 3M15 8l2 2"/>',
 };
@@ -213,8 +230,11 @@ function shell(active, content) {
     state.me?.isAdmin ? h('a', { class: 'tab', href: '#/admin', 'aria-current': active === 'admin' ? 'page' : null, style: 'margin-top:auto' }, svg(ICON.shield, 20), '운영') : null,
     h('a', { class: 'tab', href: '#/settings', 'aria-current': active === 'set' ? 'page' : null, style: state.me?.isAdmin ? null : 'margin-top:auto' }, svg(ICON.gear, 20), '설정'),
     t ? h('div', { class: 'side-foot' }, h('div', { class: 'tier' }, hexBadge(t.name), h('span', {}, h('b', {}, t.name), h('br'), h('span', { style: 'color:var(--muted)' }, `받은 도움 ${t.points}`)))) : null);
-  const gear = h('a', { class: 'top-gear', href: '#/settings', 'aria-current': active === 'set' ? 'page' : null, 'aria-label': '설정' }, svg(ICON.gear, 18), '설정');
-  return h('div', { class: 'shell' }, side, h('main', { class: 'page' }, content), gear);
+  const isDark = document.documentElement.dataset.theme === 'dark';
+  const themeBtn = h('button', { type: 'button', class: 'top-gear', 'aria-label': isDark ? '라이트 모드로' : '다크 모드로', title: isDark ? '라이트 모드로' : '다크 모드로',
+    onclick: () => { setTheme(isDark ? 'light' : 'dark'); render(); } }, svg(isDark ? ICON.sun : ICON.moon, 18), isDark ? '라이트' : '다크');
+  const gear = h('a', { class: 'top-gear', href: '#/settings', 'aria-current': active === 'set' ? 'page' : null }, svg(ICON.gear, 18), '설정');
+  return h('div', { class: 'shell' }, side, h('main', { class: 'page' }, content), h('div', { class: 'top-actions' }, themeBtn, gear));
 }
 
 // ---------- 입장 ----------
@@ -297,6 +317,23 @@ const adminTag = (tag) => (tag ? h('span', { class: 'admin-tag', title: '운영�
 function composer(onDone) {
   if (state.me.banned) return bannedNote();
   const sel = state.subject === 'all' ? state.me.mySubject : state.subject;
+  // 평소엔 한 줄짜리 막대 → 누르면 글쓰기 칸이 펼쳐짐 (목록이 더 많이 보이게)
+  if (!state.composeOpen) {
+    const open = () => { state.composeOpen = true; const full = composer(onDone); bar.replaceWith(full); full.querySelector('.title-in').focus(); };
+    const bar = h('button', { type: 'button', class: 'card compose-bar compose-open edge', 'aria-label': `${subjName(sel)}에 글쓰기`, onclick: open },
+      h('span', { class: 'pen', 'aria-hidden': 'true' }, svg(ICON.pen, 17)),
+      h('span', { class: 'ph' }, `${subjName(sel)} · 궁금한 점이나 하고 싶은 말을 남겨보세요`),
+      h('span', { class: 'go', 'aria-hidden': 'true' }, '글쓰기'));
+    // 접힌 상태에서도 캡처를 바로 붙여넣으면 펼치고 이미지 넣기
+    bar.addEventListener('paste', (e) => {
+      const files = [...(e.clipboardData?.files || [])].filter((f) => f.type.startsWith('image/'));
+      if (!files.length) return;
+      e.preventDefault(); open();
+      const dt = new DataTransfer(); files.forEach((f) => dt.items.add(f));
+      document.querySelector('.composer')?.dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true }));
+    });
+    return bar;
+  }
   const root = h('section', { class: 'card composer edge', 'aria-label': '새 글 쓰기' });
   let cat = '질문';
   const subjTag = h('span', { class: 'tag c-질문', style: 'margin-left:auto' }, subjName(sel));
@@ -313,7 +350,7 @@ function composer(onDone) {
     try {
       const { id } = await api('/posts', { method: 'POST', body: { cat, subject: sel, title: title.value, body: body.value } });
       const imgs = tray.files();
-      title.value = ''; body.value = ''; tray.clear();
+      title.value = ''; body.value = ''; tray.clear(); state.composeOpen = false;
       try { await uploadImages('post', id, imgs); } catch (e) { toast(`${e.message} 글은 올라갔으니 '고치기'로 다시 넣어 주세요.`); onDone(); send.disabled = false; return; }
       toast(state.me.showReal ? '실명으로 올라갔어요' : '익명으로 올라갔어요');
       onDone();
@@ -321,7 +358,11 @@ function composer(onDone) {
     send.disabled = false;
   });
   root.append(radios, title, body, tray.el,
-    h('div', { class: 'comp-foot' }, h('span', { class: 'hint' }, h('b', {}, 'Win + Shift + S'), ' → ', h('b', {}, 'Ctrl + V'), ' · 이름·API 키가 보이지 않는지 확인해 주세요'), send));
+    h('div', { class: 'comp-foot' }, h('span', { class: 'hint' }, h('b', {}, 'Win + Shift + S'), ' → ', h('b', {}, 'Ctrl + V'), ' · 이름·API 키가 보이지 않는지 확인해 주세요'),
+      h('button', { type: 'button', class: 'link-btn', onclick: () => {
+        if ((title.value.trim() || body.value.trim() || tray.count()) && !confirm('쓰던 내용을 지우고 접을까요?')) return;
+        state.composeOpen = false; root.replaceWith(composer(onDone));
+      } }, '접기'), send));
   return root;
 }
 
@@ -508,9 +549,20 @@ function settingsView() {
     h('section', { class: 'card', style: 'padding:20px;display:flex;align-items:center;gap:14px' },
       hexBadge(t.name, 40),
       h('div', {}, h('b', { style: 'font-size:18px' }, t.name), h('div', { class: 'sub' }, `받은 도움 ${t.points}${t.next ? ` · ${t.next.name}까지 ${t.next.need}개` : ''}`))),
+    themeSection(),
     accountSection(),
     h('p', { class: 'sub' }, '다른 수강생에게는 익명이지만, 운영자는 문제가 생긴 글을 지울 수 있어요.'),
   ]));
+}
+
+function themeSection() {
+  const opts = [['light', '라이트', ICON.sun], ['dark', '다크', ICON.moon], ['system', '기기 설정 따라가기', null]];
+  const seg = h('div', { class: 'seg', role: 'group', 'aria-label': '화면 테마' },
+    ...opts.map(([v, label, icon]) => h('button', { type: 'button', 'aria-pressed': themePref() === v ? 'true' : 'false', onclick: () => { setTheme(v); render(); } }, icon ? svg(icon, 16) : null, label)));
+  return h('section', { class: 'card', style: 'padding:20px;display:flex;flex-direction:column;gap:10px' },
+    h('h2', { style: 'margin:0;font-size:17px' }, '화면 테마'),
+    h('p', { class: 'sub', style: 'margin:0;font-size:13.5px' }, '이 기기에만 적용돼요. 오른쪽 위 버튼으로도 바로 바꿀 수 있어요.'),
+    h('div', {}, seg));
 }
 
 // 내 계정 지키기: 복구 코드 + 패스키 + 로그아웃
