@@ -171,7 +171,7 @@ function imageTray(container, limit = () => MAX_IMAGES) {
       ...files.map((f, i) => h('figure', { class: 'thumb', style: 'margin:0' },
         h('img', { src: f.url, alt: `붙여넣은 이미지 ${i + 1}` }),
         h('button', { type: 'button', 'aria-label': '이미지 빼기', onclick: () => { files.splice(i, 1); draw(); } }, svg(ICON.x, 12)))),
-      files.length < limit() ? addBtn : null, picker);
+      ...(files.length < limit() ? [addBtn] : []), picker);
   }
   async function add(list) {
     for (const file of list) {
@@ -266,8 +266,8 @@ function subjectStrip() {
   const my = state.me.mySubject;
   const row = h('div', { class: 'strip-row' });
   row.append(
-    h('div', { class: 'strip-line', 'aria-hidden': 'true', style: 'left:128px;right:32px;background:#E3E6EC' }),
-    h('div', { class: 'strip-line', 'aria-hidden': 'true', style: `left:128px;width:${(my - 1) * 64}px;background:#A9BDEB` }));
+    h('div', { class: 'strip-line base', 'aria-hidden': 'true', style: 'left:128px;right:32px' }),
+    h('div', { class: 'strip-line fill', 'aria-hidden': 'true', style: `left:128px;width:${(my - 1) * 64}px` }));
   const allUnread = Object.values(state.unread).reduce((a, b) => a + b, 0);
   const mk = (key, num, name, unread, cls) => {
     const pressed = state.subject === key;
@@ -474,12 +474,12 @@ function editPost(post, done) {
       done();
     } catch (e) { toast(e.message); save.disabled = false; }
   });
-  root.append(
+  root.append(...[
     h('h2', { style: 'margin:0;font-size:16px' }, full ? '글 고치기' : '말머리·과목 옮기기'),
     radios, title, body,
     full ? h('div', { class: 'sub', style: 'font-size:12.5px' }, `이미지 ${MAX_IMAGES}장까지 · 캡처는 Ctrl + V`) : null,
     full ? keptBox : null, full ? tray.el : null,
-    h('div', { class: 'comp-foot' }, h('button', { class: 'btn ghost', type: 'button', onclick: done }, '취소'), h('span', { class: 'hint' }), save));
+    h('div', { class: 'comp-foot' }, h('button', { class: 'btn ghost', type: 'button', onclick: done }, '취소'), h('span', { class: 'hint' }), save)].filter(Boolean));
   const article = document.querySelector('.post');
   article.replaceWith(root);
   (title || subj).focus();
@@ -541,7 +541,7 @@ function accountSection() {
     try { await api('/logout', { method: 'POST' }); } catch {}
     state.me = null; location.hash = '#/join';
   } }, '이 기기에서 로그아웃');
-  sec.append(
+  sec.append(...[
     h('h2', { id: 'acct-h', style: 'margin:0;font-size:17px' }, '내 계정 지키기'),
     h('p', { class: 'sub', style: 'margin:0;font-size:13.5px' }, '수강이 끝나 노트북을 반납해도 개인 휴대폰이나 집 컴퓨터에서 내 글·티어를 그대로 이어 쓸 수 있어요.'),
     state.me.hasRecovery ? null : h('div', { class: 'warn' }, '복구 코드가 없어요. 지금 만들어 두지 않으면 이 브라우저 쿠키가 지워질 때 계정을 잃어요.'),
@@ -552,7 +552,7 @@ function accountSection() {
         ? '지문·얼굴·PIN으로 바로 들어와요. 개인 휴대폰에 등록해 두면 가장 편해요. 팀즈 안에서는 안 될 수 있어요.'
         : '이 화면에서는 패스키를 쓸 수 없어요. 팀즈 밖 브라우저(크롬·엣지·사파리)에서 열어 주세요.'),
       pkList, h('div', {}, addPk)),
-    h('div', {}, logout));
+    h('div', {}, logout)].filter(Boolean));
   loadKeys();
   return sec;
 }
