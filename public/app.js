@@ -182,35 +182,37 @@ function insertAtCursor(el, text) {
   el.dispatchEvent(new Event('input', { bubbles: true }));
   el.focus();
 }
-// 😊 버튼: fields 중 마지막으로 누른 칸(없으면 마지막 칸)에 넣음
+// 😊 버튼: fields 중 마지막으로 누른 칸(없으면 마지막 칸)에 넣음.
+// 이모티콘 창은 글쓰기 칸 '아래'에 펼쳐져서 쓰던 글을 가리지 않음
 function emojiButton(...fields) {
   let last = fields[fields.length - 1];
   fields.forEach((f) => f && f.addEventListener('focus', () => { last = f; }));
   const wrap = h('span', { class: 'emoji-wrap' });
-  const btn = h('button', { type: 'button', class: 'emoji-btn', 'aria-label': '이모티콘 넣기', 'aria-haspopup': 'dialog', 'aria-expanded': 'false', title: '이모티콘' }, svg(ICON.smile, 20));
-  let pop = null, cat = recentEmojis().length ? -1 : 0;
+  const btn = h('button', { type: 'button', class: 'emoji-btn', 'aria-label': '이모티콘 넣기', 'aria-expanded': 'false', title: '이모티콘' }, svg(ICON.smile, 20));
+  let pop = null, box = null, cat = recentEmojis().length ? -1 : 0;
   const close = () => { pop?.remove(); pop = null; btn.setAttribute('aria-expanded', 'false'); document.removeEventListener('mousedown', outside, true); document.removeEventListener('keydown', esc, true); };
-  const outside = (e) => { if (!wrap.contains(e.target)) close(); };
-  const esc = (e) => { if (e.key === 'Escape') { e.stopPropagation(); close(); btn.focus(); } };
+  const outside = (e) => { if (!box.contains(e.target)) close(); }; // 글쓰기 칸 안(글자 칸 포함)을 누르는 건 괜찮음
+  const esc = (e) => { if (e.key === 'Escape' && pop) { e.stopPropagation(); close(); last.focus(); } };
   function draw() {
     const tabs = [...(recentEmojis().length ? [[-1, '🕘', '최근']] : []), ...EMOJI_SETS.map(([name, list], i) => [i, list[0], name])];
     const list = cat === -1 ? recentEmojis() : EMOJI_SETS[cat][1];
     pop.replaceChildren(
-      h('div', { class: 'emoji-tabs', role: 'tablist', 'aria-label': '이모티콘 종류' }, ...tabs.map(([i, icon, name]) =>
-        h('button', { type: 'button', role: 'tab', 'aria-selected': i === cat ? 'true' : 'false', title: name, 'aria-label': name, onclick: () => { cat = i; draw(); } }, icon))),
+      h('div', { class: 'emoji-top' },
+        h('div', { class: 'emoji-tabs', role: 'tablist', 'aria-label': '이모티콘 종류' }, ...tabs.map(([i, icon, name]) =>
+          h('button', { type: 'button', role: 'tab', 'aria-selected': i === cat ? 'true' : 'false', title: name, 'aria-label': name, onclick: () => { cat = i; draw(); } }, icon))),
+        h('button', { type: 'button', class: 'emoji-close', 'aria-label': '이모티콘 창 닫기', onclick: () => { close(); last.focus(); } }, svg(ICON.x, 16))),
       h('div', { class: 'emoji-name' }, cat === -1 ? '최근 쓴 이모티콘' : EMOJI_SETS[cat][0]),
       h('div', { class: 'emoji-grid' }, ...list.map((e) => h('button', { type: 'button', 'aria-label': e, onclick: () => { insertAtCursor(last, e); rememberEmoji(e); } }, e))),
-      h('div', { class: 'emoji-foot' }, '여러 개 골라도 돼요 · Windows는 ', h('b', {}, 'Win + .'), '으로도 열 수 있어요'));
+      h('div', { class: 'emoji-foot' }, '고를 때마다 위 글에 바로 들어가요 · 여러 개 골라도 돼요 · Windows는 ', h('b', {}, 'Win + .'), '으로도 열 수 있어요'));
   }
   btn.addEventListener('mousedown', (e) => e.preventDefault()); // 글 칸의 커서 위치 유지
   btn.addEventListener('click', () => {
     if (pop) { close(); return; }
-    pop = h('div', { class: 'emoji-pop', role: 'dialog', 'aria-label': '이모티콘 고르기' });
-    pop.addEventListener('mousedown', (e) => { if (e.target.closest('.emoji-grid button, .emoji-tabs button')) e.preventDefault(); });
-    draw(); wrap.append(pop); btn.setAttribute('aria-expanded', 'true');
-    // 화면 아래쪽이 좁으면 위로 열기
-    const r = btn.getBoundingClientRect();
-    pop.classList.toggle('up', window.innerHeight - r.bottom < 340 && r.top > 340);
+    box = wrap.closest('.reply-box, .composer') || wrap.parentElement;
+    pop = h('div', { class: 'emoji-panel', role: 'group', 'aria-label': '이모티콘 고르기' });
+    pop.addEventListener('mousedown', (e) => { if (e.target.closest('button')) e.preventDefault(); });
+    draw(); box.append(pop); btn.setAttribute('aria-expanded', 'true');
+    pop.scrollIntoView({ block: 'nearest' });
     document.addEventListener('mousedown', outside, true); document.addEventListener('keydown', esc, true);
   });
   wrap.append(btn);
