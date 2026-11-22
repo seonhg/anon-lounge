@@ -70,6 +70,7 @@ const ICON = {
   bell: '<path d="M6 9a6 6 0 1 1 12 0c0 5 2 6.5 2 6.5H4S6 14 6 9z"/><path d="M10 19a2 2 0 0 0 4 0"/>',
   next: '<path d="M9 6l6 6-6 6"/>',
   reply: '<path d="M9 14l-5-5 5-5"/><path d="M4 9h10a6 6 0 0 1 6 6v5"/>',
+  smile: '<circle cx="12" cy="12" r="9"/><path d="M8.5 14.5a4.5 4.5 0 0 0 7 0"/><path d="M9 9.5h.01M15 9.5h.01" stroke-width="3" stroke-linecap="round"/>',
   shield: '<path d="M12 3l8 3v6c0 4.5-3.4 8.3-8 9-4.6-.7-8-4.5-8-9V6z"/><path d="M9 12l2 2 4-4"/>',
   key: '<circle cx="8" cy="15" r="4"/><path d="M11 12l9-9M17 6l3 3M15 8l2 2"/>',
 };
@@ -158,6 +159,62 @@ function hexBadge(tierName, size = 26) {
   const outer = h('span', { class: 'hex', 'aria-hidden': 'true', style: `width:${size}px;height:${Math.round(size * 1.12)}px;background:linear-gradient(180deg, ${c[0]}, ${c[1]} 45%, ${c[2]})` });
   outer.append(h('i', { style: `background: radial-gradient(circle at 50% 30%, ${c[3]}, ${c[4]} 80%)` }));
   return outer;
+}
+
+// ---------- 이모티콘 ----------
+const EMOJI_SETS = [
+  ['표정', '😀 😃 😄 😁 😆 😅 🤣 😂 🙂 😉 😊 😇 🥰 😍 🤩 😘 😋 😛 😜 🤪 🤗 🤭 🤫 🤔 🫡 🤐 🤨 😐 😑 😶 🫠 😏 😒 🙄 😬 😮‍💨 😌 😔 😪 😴 😷 🤒 🥵 🥶 😵‍💫 🤯 🥳 😎 🤓 🧐 😕 🫤 😟 🙁 😮 😯 😲 😳 🥺 🥹 😦 😧 😨 😰 😥 😢 😭 😱 😖 😣 😞 😓 😩 😫 🥱 😤 😡 😠 🤬 💀 👻 🤖 👾'],
+  ['손', '👍 👎 👏 🙌 👐 🤲 🙏 🤝 👌 🤌 🤏 ✌️ 🤞 🫰 🤟 🤘 🤙 👈 👉 👆 👇 ☝️ ✋ 🤚 🖐️ 🖖 👋 💪 ✍️ 🫶 🫵'],
+  ['공부·코딩', '💻 🖥️ ⌨️ 🖱️ 💾 📁 📂 📄 📝 📚 📖 📒 ✏️ 🖊️ 📌 📎 🔍 🔑 🔒 🔓 🐛 🛠️ ⚙️ 🧪 🧠 💡 📊 📈 📉 ☁️ 🌐 🔗 🚀 ⏰ ⏳ 📅 ✅ ☑️ ❌ ⭕ ❗ ❓ ⚠️ 🚫 💯 🆗 🆘 🎯 🏆 🥇 🎓'],
+  ['마음', '❤️ 🧡 💛 💚 💙 💜 🤍 🖤 🤎 💖 💗 💓 💕 💞 💘 💝 💔 ❣️ ✨ ⭐ 🌟 💫 🔥 💥 💢 💦 💨 🎉 🎊 🎁 🎈 👀 💬 💭 💤'],
+  ['자연·날씨', '☀️ 🌤️ ⛅ ☁️ 🌧️ ⛈️ 🌩️ ❄️ ☃️ 🌈 🌙 🌛 ⭐ 🌍 🌊 🌋 🌸 🌷 🌹 🌻 🌼 🍀 🌿 🌱 🌳 🌵 🍁 🍂 🌺 💐'],
+  ['활동·사물', '⚽ 🏀 ⚾ 🎾 🏐 🎮 🕹️ 🎲 🧩 🎨 🎬 🎤 🎧 🎵 🎶 🎸 🎹 🏃 🚶 🧘 🛌 🚌 🚇 🚗 ✈️ 🏠 🏫 🏢 📱 📷 💰 💳 🛒 🎒 👓 ⌚ 🧸 🎂 🍀 🙈 🙉 🙊'],
+  ['동물·음식', '🐶 🐱 🐭 🐹 🐰 🦊 🐻 🐼 🐨 🐯 🦁 🐮 🐷 🐸 🐵 🐔 🐧 🐣 🦄 🐝 🐢 🐳 🐬 🐙 ☕ 🍵 🧃 🥤 🍺 🍕 🍔 🍟 🌭 🍗 🍜 🍣 🍙 🍰 🍩 🍪 🍫 🍦 🍓 🍎 🍌 🍉'],
+].map(([name, list]) => [name, list.split(' ')]);
+const recentEmojis = () => { try { return JSON.parse(localStorage.getItem('al-emoji') || '[]'); } catch { return []; } };
+function rememberEmoji(e) { try { localStorage.setItem('al-emoji', JSON.stringify([e, ...recentEmojis().filter((x) => x !== e)].slice(0, 24))); } catch {} }
+// 커서 자리에 글자 넣기
+function insertAtCursor(el, text) {
+  const start = el.selectionStart ?? el.value.length, end = el.selectionEnd ?? el.value.length;
+  const max = Number(el.getAttribute('maxlength')) || Infinity;
+  if (el.value.length - (end - start) + text.length > max) { toast('글자 수가 꽉 찼어요.'); return; }
+  el.setRangeText(text, start, end, 'end');
+  el.dispatchEvent(new Event('input', { bubbles: true }));
+  el.focus();
+}
+// 😊 버튼: fields 중 마지막으로 누른 칸(없으면 마지막 칸)에 넣음
+function emojiButton(...fields) {
+  let last = fields[fields.length - 1];
+  fields.forEach((f) => f && f.addEventListener('focus', () => { last = f; }));
+  const wrap = h('span', { class: 'emoji-wrap' });
+  const btn = h('button', { type: 'button', class: 'emoji-btn', 'aria-label': '이모티콘 넣기', 'aria-haspopup': 'dialog', 'aria-expanded': 'false', title: '이모티콘' }, svg(ICON.smile, 20));
+  let pop = null, cat = recentEmojis().length ? -1 : 0;
+  const close = () => { pop?.remove(); pop = null; btn.setAttribute('aria-expanded', 'false'); document.removeEventListener('mousedown', outside, true); document.removeEventListener('keydown', esc, true); };
+  const outside = (e) => { if (!wrap.contains(e.target)) close(); };
+  const esc = (e) => { if (e.key === 'Escape') { e.stopPropagation(); close(); btn.focus(); } };
+  function draw() {
+    const tabs = [...(recentEmojis().length ? [[-1, '🕘', '최근']] : []), ...EMOJI_SETS.map(([name, list], i) => [i, list[0], name])];
+    const list = cat === -1 ? recentEmojis() : EMOJI_SETS[cat][1];
+    pop.replaceChildren(
+      h('div', { class: 'emoji-tabs', role: 'tablist', 'aria-label': '이모티콘 종류' }, ...tabs.map(([i, icon, name]) =>
+        h('button', { type: 'button', role: 'tab', 'aria-selected': i === cat ? 'true' : 'false', title: name, 'aria-label': name, onclick: () => { cat = i; draw(); } }, icon))),
+      h('div', { class: 'emoji-name' }, cat === -1 ? '최근 쓴 이모티콘' : EMOJI_SETS[cat][0]),
+      h('div', { class: 'emoji-grid' }, ...list.map((e) => h('button', { type: 'button', 'aria-label': e, onclick: () => { insertAtCursor(last, e); rememberEmoji(e); } }, e))),
+      h('div', { class: 'emoji-foot' }, '여러 개 골라도 돼요 · Windows는 ', h('b', {}, 'Win + .'), '으로도 열 수 있어요'));
+  }
+  btn.addEventListener('mousedown', (e) => e.preventDefault()); // 글 칸의 커서 위치 유지
+  btn.addEventListener('click', () => {
+    if (pop) { close(); return; }
+    pop = h('div', { class: 'emoji-pop', role: 'dialog', 'aria-label': '이모티콘 고르기' });
+    pop.addEventListener('mousedown', (e) => { if (e.target.closest('.emoji-grid button, .emoji-tabs button')) e.preventDefault(); });
+    draw(); wrap.append(pop); btn.setAttribute('aria-expanded', 'true');
+    // 화면 아래쪽이 좁으면 위로 열기
+    const r = btn.getBoundingClientRect();
+    pop.classList.toggle('up', window.innerHeight - r.bottom < 340 && r.top > 340);
+    document.addEventListener('mousedown', outside, true); document.addEventListener('keydown', esc, true);
+  });
+  wrap.append(btn);
+  return wrap;
 }
 
 // ---------- 이미지: 붙여넣기 → 자동으로 줄이기 ----------
@@ -368,7 +425,7 @@ function composer(onDone) {
     send.disabled = false;
   });
   root.append(radios, title, body, tray.el,
-    h('div', { class: 'comp-foot' }, h('span', { class: 'hint' }, h('b', {}, 'Win + Shift + S'), ' → ', h('b', {}, 'Ctrl + V'), ' · 이름·API 키가 보이지 않는지 확인해 주세요'),
+    h('div', { class: 'comp-foot' }, emojiButton(title, body), h('span', { class: 'hint pc-hint' }, h('b', {}, 'Win + Shift + S'), ' → ', h('b', {}, 'Ctrl + V'), ' · 이름·API 키가 보이지 않는지 확인해 주세요'),
       h('button', { type: 'button', class: 'link-btn', onclick: () => {
         if ((title.value.trim() || body.value.trim() || tray.count()) && !confirm('쓰던 내용을 지우고 접을까요?')) return;
         state.composeOpen = false; root.replaceWith(composer(onDone));
@@ -504,7 +561,7 @@ async function postView(id) {
         postView(id);
       } catch (e) { toast(e.message); go.disabled = false; }
     });
-    root.append(ta, tray.el, h('div', { class: 'comp-foot' }, h('span', { class: 'hint' }, state.me.showReal ? '실명으로 올라가요' : '익명으로 올라가요'),
+    root.append(ta, tray.el, h('div', { class: 'comp-foot' }, emojiButton(ta), h('span', { class: 'hint' }, state.me.showReal ? '실명으로 올라가요' : '익명으로 올라가요'),
       h('button', { type: 'button', class: 'link-btn', onclick: () => root.remove() }, '취소'), go));
     slot.append(root);
     ta.focus();
@@ -545,7 +602,7 @@ async function postView(id) {
       postView(id);
     } catch (e) { toast(e.message); send.disabled = false; }
   });
-  ansRoot.append(ansBody, tray.el, h('div', { class: 'comp-foot' }, h('span', { class: 'hint' }, state.me.showReal ? '실명으로 올라가요' : '익명으로 올라가요'), send));
+  ansRoot.append(ansBody, tray.el, h('div', { class: 'comp-foot' }, emojiButton(ansBody), h('span', { class: 'hint' }, state.me.showReal ? '실명으로 올라가요' : '익명으로 올라가요'), send));
 
   app.replaceChildren(shell('q', [
     h('a', { class: 'back', href: '#/' }, svg(ICON.back), '목록'),
@@ -607,7 +664,7 @@ function editPost(post, done) {
     radios, title, body,
     full ? h('div', { class: 'sub', style: 'font-size:12.5px' }, `이미지 ${MAX_IMAGES}장까지 · 캡처는 Ctrl + V`) : null,
     full ? keptBox : null, full ? tray.el : null,
-    h('div', { class: 'comp-foot' }, h('button', { class: 'btn ghost', type: 'button', onclick: done }, '취소'), h('span', { class: 'hint' }), save)].filter(Boolean));
+    h('div', { class: 'comp-foot' }, full ? emojiButton(title, body) : null, h('button', { class: 'btn ghost', type: 'button', onclick: done }, '취소'), h('span', { class: 'hint' }), save)].filter(Boolean));
   const article = document.querySelector('.post');
   article.replaceWith(root);
   (title || subj).focus();
