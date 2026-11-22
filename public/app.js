@@ -282,7 +282,8 @@ async function listView() {
         p.excerpt ? h('div', { class: 'item-ex' }, p.excerpt) : null,
         h('div', { class: 'meta' }, h('span', {}, `${p.author} · ${ago(p.createdAt)}`), h('span', {}, `답변 ${p.answers}`),
           p.hasImage ? h('span', { style: 'display:inline-flex;align-items:center;gap:3px' }, svg(ICON.img, 13), '캡처') : null,
-          helpButton('post', p))))));
+          helpButton('post', p))),
+      p.thumb ? h('a', { class: 'item-thumb', href: `#/post/${p.id}`, 'aria-label': `${p.title} 첨부 이미지` }, h('img', { src: p.thumb, alt: '', loading: 'lazy' })) : null)));
   } catch (e) {
     list.replaceChildren(h('li', { class: 'card empty' }, e.message));
   }

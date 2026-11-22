@@ -176,14 +176,14 @@ export async function onRequest(context) {
           `SELECT p.id, p.cat, p.subject, p.title, substr(p.body, 1, 120) AS excerpt, p.author_name,
                   p.answer_count, p.help_count, p.created_at, (p.user_id = ?1) AS mine,
                   EXISTS (SELECT 1 FROM helps h WHERE h.user_id = ?1 AND h.target_type = 'post' AND h.target_id = p.id) AS helped,
-                  EXISTS (SELECT 1 FROM images i WHERE i.owner_type = 'post' AND i.owner_id = p.id) AS has_image
+                  (SELECT i.id FROM images i WHERE i.owner_type = 'post' AND i.owner_id = p.id ORDER BY i.id LIMIT 1) AS thumb_id
              FROM posts p WHERE ${where.join(' AND ')}
             ORDER BY p.created_at DESC LIMIT 100`
         ).bind(...args).all();
         const posts = results.map((p) => ({
           id: p.id, cat: p.cat, subject: p.subject, title: p.title, excerpt: p.excerpt,
           author: p.author_name || '익명', answers: p.answer_count, helps: p.help_count, createdAt: p.created_at,
-          mine: !!p.mine, helped: !!p.helped, hasImage: !!p.has_image,
+          mine: !!p.mine, helped: !!p.helped, hasImage: !!p.thumb_id, thumb: p.thumb_id ? `/api/images/${p.thumb_id}` : null,
           unread: seen !== null && !p.mine && p.created_at > seen,
         }));
         if (subject) {
