@@ -128,6 +128,8 @@ async function ensureSchema(env) {
         'CREATE INDEX IF NOT EXISTS idx_passkeys_user ON passkeys(user_id)',
         'CREATE TABLE IF NOT EXISTS challenges (id TEXT PRIMARY KEY, challenge TEXT NOT NULL, kind TEXT NOT NULL, user_id TEXT, created_at INTEGER NOT NULL)',
         'CREATE TABLE IF NOT EXISTS rate_limits (key TEXT PRIMARY KEY, count INTEGER NOT NULL, reset_at INTEGER NOT NULL)',
+        'CREATE TABLE IF NOT EXISTS notifications (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT NOT NULL, kind TEXT NOT NULL, post_id INTEGER NOT NULL, answer_id INTEGER, created_at INTEGER NOT NULL, read_at INTEGER NOT NULL DEFAULT 0)',
+        'CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications(user_id, created_at DESC)',
       ];
       for (const s of stmts) await db.prepare(s).run();
       const { results: cols } = await db.prepare('PRAGMA table_info(users)').all();
@@ -400,6 +402,27 @@ export async function onRequest(context) {
           canAssignAdmins: !!user.is_owner,
         });
       }
+      // 한 사용자가 쓴 글·답변 (지운 것 포함)
+      if (parts[1] === 'users' && parts[2] && parts[3] === 'activity' && method === 'GET') {
+        const target = await env.DB.prepare('SELECT id, is_admin, is_owner, banned, created_at, last_seen_at FROM users WHERE id = ?').bind(parts[2]).first();
+        if (!target) return fail(404, '사용자를 찾을 수 없어요.');
+        const { results: posts } = await env.DB.prepare(
+          `SELECT p.id, p.cat, p.subject, p.title, substr(p.body, 1, 120) AS excerpt, p.author_name, p.answer_count, p.help_count, p.deleted, p.created_at,
+                  (SELECT COUNT(*) FROM images i WHERE i.owner_type = 'post' AND i.owner_id = p.id) AS images
+             FROM posts p WHERE p.user_id = ? ORDER BY p.created_at DESC LIMIT 200`
+        ).bind(target.id).all();
+        const { results: answers } = await env.DB.prepare(
+          `SELECT a.id, a.post_id, substr(a.body, 1, 160) AS excerpt, a.author_name, a.help_count, a.deleted, a.created_at,
+                  p.title AS post_title, p.deleted AS post_deleted,
+                  (SELECT COUNT(*) FROM images i WHERE i.owner_type = 'answer' AND i.owner_id = a.id) AS images
+             FROM answers a JOIN posts p ON p.id = a.post_id WHERE a.user_id = ? ORDER BY a.created_at DESC LIMIT 200`
+        ).bind(target.id).all();
+        return json({
+          user: { id: target.id, tag: tagOf(target.id), isAdmin: !!target.is_admin, isOwner: !!target.is_owner, banned: !!target.banned, createdAt: target.created_at, lastSeenAt: target.last_seen_at, me: target.id === user.id },
+          posts: posts.map((p) => ({ id: p.id, cat: p.cat, subject: p.subject, title: p.title, excerpt: p.excerpt, realName: p.author_name, answers: p.answer_count, helps: p.help_count, images: p.images, deleted: !!p.deleted, createdAt: p.created_at })),
+          answers: answers.map((a) => ({ id: a.id, postId: a.post_id, postTitle: a.post_title, postDeleted: !!a.post_deleted, excerpt: a.excerpt, realName: a.author_name, helps: a.help_count, images: a.images, deleted: !!a.deleted, createdAt: a.created_at })),
+        });
+      }
       if (parts[1] === 'users' && parts[2] && method === 'PATCH') {
         const target = await env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(parts[2]).first();
         if (!target) return fail(404, '사용자를 찾을 수 없어요.');
@@ -415,6 +438,32 @@ export async function onRequest(context) {
           await env.DB.prepare('UPDATE users SET banned = ? WHERE id = ?').bind(b.banned ? 1 : 0, target.id).run();
           if (b.banned) await env.DB.prepare('UPDATE users SET is_admin = 0 WHERE id = ?').bind(target.id).run();
         }
+        return json({ ok: true });
+      }
+    }
+
+    // 알림
+    if (parts[0] === 'notifications') {
+      const alive = `EXISTS (SELECT 1 FROM posts p WHERE p.id = n.post_id AND p.deleted = 0)
+                     AND (n.answer_id IS NULL OR EXISTS (SELECT 1 FROM answers a WHERE a.id = n.answer_id AND a.deleted = 0))`;
+      if (parts[1] === 'count' && method === 'GET') {
+        const r = await env.DB.prepare(`SELECT COUNT(*) AS n FROM notifications n WHERE n.user_id = ? AND n.read_at = 0 AND ${alive}`).bind(user.id).first();
+        return json({ unread: r.n });
+      }
+      if (parts.length === 1 && method === 'GET') {
+        const { results } = await env.DB.prepare(
+          `SELECT n.id, n.kind, n.post_id, n.created_at, n.read_at, p.title AS post_title, p.cat, p.subject,
+                  substr(a.body, 1, 80) AS snippet, (SELECT COUNT(*) FROM images i WHERE i.owner_type = 'answer' AND i.owner_id = a.id) AS images
+             FROM notifications n JOIN posts p ON p.id = n.post_id LEFT JOIN answers a ON a.id = n.answer_id
+            WHERE n.user_id = ? AND ${alive} ORDER BY n.created_at DESC LIMIT 50`
+        ).bind(user.id).all();
+        return json({ notifications: results.map((n) => ({
+          id: n.id, kind: n.kind, postId: n.post_id, postTitle: n.post_title, cat: n.cat, subject: n.subject,
+          snippet: n.snippet || (n.images ? '(이미지)' : ''), createdAt: n.created_at, read: !!n.read_at,
+        })) });
+      }
+      if (parts[1] === 'read' && method === 'POST') {
+        await env.DB.prepare('UPDATE notifications SET read_at = ? WHERE user_id = ? AND read_at = 0').bind(Date.now(), user.id).run();
         return json({ ok: true });
       }
     }
@@ -463,7 +512,7 @@ export async function onRequest(context) {
           author: p.author_name || '익명', answers: p.answer_count, helps: p.help_count, createdAt: p.created_at,
           mine: !!p.mine, helped: !!p.helped, hasImage: !!p.thumb_id, imageCount: p.image_count, thumb: p.thumb_id ? `/api/images/${p.thumb_id}` : null,
           unread: seen !== null && !p.mine && p.created_at > seen,
-          tag: user.is_admin ? tagOf(p.user_id) : undefined,
+          tag: user.is_admin ? tagOf(p.user_id) : undefined, uid: user.is_admin ? p.user_id : undefined,
         }));
         if (subject) {
           await env.DB.prepare(
@@ -515,6 +564,7 @@ export async function onRequest(context) {
             WHERE (owner_type = 'post' AND owner_id = ?)
                OR (owner_type = 'answer' AND owner_id IN (SELECT id FROM answers WHERE post_id = ? AND deleted = 0))`
         ).bind(postId, postId).all();
+        await env.DB.prepare('UPDATE notifications SET read_at = ? WHERE user_id = ? AND post_id = ? AND read_at = 0').bind(Date.now(), user.id, postId).run();
         const helpedPost = await env.DB.prepare("SELECT 1 AS x FROM helps WHERE user_id = ? AND target_type = 'post' AND target_id = ?").bind(user.id, postId).first();
         const numbers = new Map();
         const label = (uid, name) => {
@@ -525,16 +575,17 @@ export async function onRequest(context) {
         };
         const imagesOf = (type, id) => imgs.filter((i) => i.owner_type === type && i.owner_id === id).map((i) => `/api/images/${i.id}`);
         const adminTag = (uid) => (user.is_admin ? tagOf(uid) : undefined);
+        const adminUid = (uid) => (user.is_admin ? uid : undefined);
         return json({
           post: {
             id: post.id, cat: post.cat, subject: post.subject, title: post.title, body: post.body,
             author: post.author_name || '익명', createdAt: post.created_at, helps: post.help_count,
-            helped: !!helpedPost, mine: post.user_id === user.id, images: imagesOf('post', post.id), tag: adminTag(post.user_id),
+            helped: !!helpedPost, mine: post.user_id === user.id, images: imagesOf('post', post.id), tag: adminTag(post.user_id), uid: adminUid(post.user_id),
             editedAt: post.edited_at || 0,
           },
           answers: answers.map((a) => ({
             id: a.id, body: a.body, author: label(a.user_id, a.author_name), createdAt: a.created_at,
-            helps: a.help_count, helped: !!a.helped, mine: a.user_id === user.id, images: imagesOf('answer', a.id), tag: adminTag(a.user_id),
+            helps: a.help_count, helped: !!a.helped, mine: a.user_id === user.id, images: imagesOf('answer', a.id), tag: adminTag(a.user_id), uid: adminUid(a.user_id),
           })),
           canModerate: !!user.is_admin,
           banned: !!user.banned,
@@ -586,6 +637,11 @@ export async function onRequest(context) {
             .bind('answer', answerId, img.mime, img.bytes, now).run();
         }
         await env.DB.prepare('UPDATE posts SET answer_count = answer_count + 1 WHERE id = ?').bind(postId).run();
+        // 글쓴이에게 알림 (내 글에 내가 단 답변은 빼고)
+        if (post.user_id !== user.id) {
+          await env.DB.prepare("INSERT INTO notifications (user_id, kind, post_id, answer_id, created_at) VALUES (?, 'answer', ?, ?, ?)")
+            .bind(post.user_id, postId, answerId, now).run();
+        }
         await env.DB.prepare('UPDATE users SET last_post_at = ? WHERE id = ?').bind(now, user.id).run();
         return json({ id: answerId }, 201);
       }

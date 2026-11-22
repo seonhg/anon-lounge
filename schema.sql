@@ -37,6 +37,18 @@ CREATE TABLE IF NOT EXISTS passkeys (
 );
 CREATE INDEX IF NOT EXISTS idx_passkeys_user ON passkeys(user_id);
 
+-- 알림: 내 글에 답변이 달리면
+CREATE TABLE IF NOT EXISTS notifications (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id    TEXT NOT NULL,
+  kind       TEXT NOT NULL,              -- 'answer'
+  post_id    INTEGER NOT NULL,
+  answer_id  INTEGER,
+  created_at INTEGER NOT NULL,
+  read_at    INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications(user_id, created_at DESC);
+
 -- 코드를 계속 틀리는 곳(IP 해시) 잠깐 막기
 CREATE TABLE IF NOT EXISTS rate_limits (
   key      TEXT PRIMARY KEY,

@@ -27,7 +27,7 @@ function applyTheme() {
 function setTheme(pref) { try { localStorage.setItem('al-theme', pref); } catch {} applyTheme(); }
 darkMQ.addEventListener?.('change', () => themePref() === 'system' && applyTheme());
 applyTheme();
-const state = { me: null, unread: {}, subject: null, cat: '전체' };
+const state = { me: null, unread: {}, subject: null, cat: '전체', alerts: 0 };
 
 // ---------- 도구 ----------
 function h(tag, attrs = {}, ...kids) {
@@ -67,6 +67,8 @@ const ICON = {
   sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>',
   moon: '<path d="M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5z"/>',
   pen: '<path d="M4 20h4L19 9l-4-4L4 16z"/><path d="M13.5 6.5l4 4"/>',
+  bell: '<path d="M6 9a6 6 0 1 1 12 0c0 5 2 6.5 2 6.5H4S6 14 6 9z"/><path d="M10 19a2 2 0 0 0 4 0"/>',
+  next: '<path d="M9 6l6 6-6 6"/>',
   shield: '<path d="M12 3l8 3v6c0 4.5-3.4 8.3-8 9-4.6-.7-8-4.5-8-9V6z"/><path d="M9 12l2 2 4-4"/>',
   key: '<circle cx="8" cy="15" r="4"/><path d="M11 12l9-9M17 6l3 3M15 8l2 2"/>',
 };
@@ -227,6 +229,7 @@ function shell(active, content) {
     h('a', { class: 'tab', href: '#/', 'aria-current': active === 'q' ? 'page' : null }, svg(ICON.q, 20), '질문', unreadTotal ? h('span', { class: 'badge' }, unreadTotal) : null),
     h('span', { class: 'tab', 'aria-disabled': 'true', title: '곧 열려요' }, svg(ICON.note, 20), '정리', h('span', { class: 'soon' }, '준비 중')),
     h('span', { class: 'tab', 'aria-disabled': 'true', title: '곧 열려요' }, svg(ICON.quiz, 20), '퀴즈', h('span', { class: 'soon' }, '준비 중')),
+    h('a', { class: 'tab desk-only', href: '#/alerts', 'aria-current': active === 'alerts' ? 'page' : null }, svg(ICON.bell, 20), '알림', h('span', { class: 'badge alert-badge', hidden: !state.alerts ? true : null }, state.alerts)),
     state.me?.isAdmin ? h('a', { class: 'tab', href: '#/admin', 'aria-current': active === 'admin' ? 'page' : null, style: 'margin-top:auto' }, svg(ICON.shield, 20), '운영') : null,
     h('a', { class: 'tab', href: '#/settings', 'aria-current': active === 'set' ? 'page' : null, style: state.me?.isAdmin ? null : 'margin-top:auto' }, svg(ICON.gear, 20), '설정'),
     t ? h('div', { class: 'side-foot' }, h('div', { class: 'tier' }, hexBadge(t.name), h('span', {}, h('b', {}, t.name), h('br'), h('span', { style: 'color:var(--muted)' }, `받은 도움 ${t.points}`)))) : null);
@@ -234,7 +237,11 @@ function shell(active, content) {
   const themeBtn = h('button', { type: 'button', class: 'top-gear', 'aria-label': isDark ? '라이트 모드로' : '다크 모드로', title: isDark ? '라이트 모드로' : '다크 모드로',
     onclick: () => { setTheme(isDark ? 'light' : 'dark'); render(); } }, svg(isDark ? ICON.sun : ICON.moon, 18), isDark ? '라이트' : '다크');
   const gear = h('a', { class: 'top-gear', href: '#/settings', 'aria-current': active === 'set' ? 'page' : null }, svg(ICON.gear, 18), '설정');
-  return h('div', { class: 'shell' }, side, h('main', { class: 'page' }, content), h('div', { class: 'top-actions' }, themeBtn, gear));
+  const bell = h('a', { class: 'top-gear bell', href: '#/alerts', 'aria-current': active === 'alerts' ? 'page' : null, 'aria-label': state.alerts ? `알림 ${state.alerts}개` : '알림' },
+    svg(ICON.bell, 18), h('span', { class: 'desk-only' }, '알림'), h('span', { class: 'badge alert-badge', hidden: !state.alerts ? true : null }, state.alerts));
+  const tierChip = t ? h('span', { class: 'top-gear tier-chip phone-only', 'aria-label': `내 티어 ${t.name}` }, hexBadge(t.name, 18), t.name) : null;
+  themeBtn.classList.add('desk-only'); gear.classList.add('desk-only');
+  return h('div', { class: 'shell' }, side, h('main', { class: 'page' }, content), h('div', { class: 'top-actions' }, tierChip, bell, themeBtn, gear));
 }
 
 // ---------- 입장 ----------
@@ -312,7 +319,9 @@ function subjectStrip() {
 }
 
 const bannedNote = () => h('section', { class: 'card empty edge', role: 'note' }, '운영자가 글쓰기를 제한했어요. 글은 계속 읽을 수 있어요.');
-const adminTag = (tag) => (tag ? h('span', { class: 'admin-tag', title: '운영자에게만 보이는 작성자 번호' }, tag) : null);
+const adminTag = (tag, uid) => (!tag ? null : uid
+  ? h('a', { class: 'admin-tag', href: `#/admin/user/${uid}`, title: '이 사용자가 쓴 글·답변 보기 (운영자에게만 보임)' }, tag)
+  : h('span', { class: 'admin-tag', title: '운영자에게만 보이는 작성자 번호' }, tag));
 
 function composer(onDone) {
   if (state.me.banned) return bannedNote();
@@ -387,8 +396,7 @@ async function listView() {
   const chips = h('div', { class: 'chips', role: 'tablist', 'aria-label': '말머리' },
     ...['전체', ...CATS].map((c) => h('button', { type: 'button', class: 'chip', role: 'tab', 'aria-selected': state.cat === c ? 'true' : 'false', onclick: () => { state.cat = c; render(); } }, c)));
   const top = h('header', { style: 'display:flex;align-items:flex-end;justify-content:space-between;gap:12px;flex-wrap:wrap' },
-    h('div', {}, h('h1', {}, '질문'), h('p', { class: 'sub' }, '질문, 잡담, 건의 모두 여기에. 전부 익명이에요.')),
-    h('span', { class: 'topbar-tier' }, hexBadge(state.me.tier.name, 22), state.me.tier.name));
+    h('div', {}, h('h1', {}, '질문'), h('p', { class: 'sub' }, '질문, 잡담, 건의 모두 여기에. 전부 익명이에요.')));
   app.replaceChildren(shell('q', [top, subjectStrip(), chips, composer(() => render()), list]));
 
   try {
@@ -410,7 +418,7 @@ async function listView() {
         h('div', { class: 'item-tags' }, h('span', { class: `tag c-${p.cat}` }, p.cat), h('span', { class: 'tag' }, subjName(p.subject))),
         h('a', { class: 'item-title', href: `#/post/${p.id}` }, p.title),
         p.excerpt ? h('div', { class: 'item-ex' }, p.excerpt) : null,
-        h('div', { class: 'meta' }, h('span', {}, `${p.author} · ${ago(p.createdAt)}`), adminTag(p.tag), h('span', {}, `답변 ${p.answers}`),
+        h('div', { class: 'meta' }, h('span', {}, `${p.author} · ${ago(p.createdAt)}`), adminTag(p.tag, p.uid), h('span', {}, `답변 ${p.answers}`),
           p.hasImage ? h('span', { style: 'display:inline-flex;align-items:center;gap:3px' }, svg(ICON.img, 13), p.imageCount > 1 ? `캡처 ${p.imageCount}` : '캡처') : null,
           helpButton('post', p))),
       p.thumb ? h('a', { class: 'item-thumb', href: `#/post/${p.id}`, 'aria-label': `${p.title} 첨부 이미지` }, h('img', { src: p.thumb, alt: '', loading: 'lazy' })) : null)));
@@ -420,12 +428,51 @@ async function listView() {
 }
 
 // ---------- 글 보기 ----------
-function lightbox(src) {
-  const box = h('div', { class: 'lightbox', role: 'dialog', 'aria-label': '이미지 크게 보기', tabindex: '-1', onclick: () => box.remove() }, h('img', { src, alt: '' }));
-  document.body.append(box); box.focus();
-  box.addEventListener('keydown', (e) => e.key === 'Escape' && box.remove());
+// 이미지 크게 보기: 여러 장이면 ← → 버튼, 키보드 방향키, 손가락으로 밀어서 넘기기
+function lightbox(urls, start = 0) {
+  if (typeof urls === 'string') urls = [urls];
+  let i = start;
+  const prevFocus = document.activeElement;
+  const img = h('img', { alt: '' });
+  const count = h('div', { class: 'lb-count', 'aria-live': 'polite' });
+  const strip = h('div', { class: 'lb-strip' });
+  const many = urls.length > 1;
+  const show = (n) => {
+    i = (n + urls.length) % urls.length;
+    img.src = urls[i]; img.alt = `첨부 이미지 ${i + 1} / ${urls.length}`;
+    count.textContent = `${i + 1} / ${urls.length}`;
+    strip.querySelectorAll('button').forEach((b, k) => b.setAttribute('aria-current', k === i ? 'true' : 'false'));
+    strip.children[i]?.scrollIntoView({ block: 'nearest', inline: 'center' });
+    // 다음 이미지 미리 불러오기
+    if (many) new Image().src = urls[(i + 1) % urls.length];
+  };
+  const close = () => { box.remove(); document.removeEventListener('keydown', onKey); prevFocus?.focus?.(); };
+  const onKey = (e) => {
+    if (e.key === 'Escape') close();
+    else if (many && e.key === 'ArrowRight') show(i + 1);
+    else if (many && e.key === 'ArrowLeft') show(i - 1);
+  };
+  const nav = (dir, label) => h('button', { type: 'button', class: `lb-nav ${dir > 0 ? 'next' : 'prev'}`, 'aria-label': label, onclick: (e) => { e.stopPropagation(); show(i + dir); } },
+    svg(dir > 0 ? ICON.next : ICON.back, 28));
+  if (many) strip.append(...urls.map((u, k) => h('button', { type: 'button', 'aria-label': `${k + 1}번째 이미지`, onclick: (e) => { e.stopPropagation(); show(k); } }, h('img', { src: u, alt: '' }))));
+  const stage = h('div', { class: 'lb-stage' }, img);
+  const box = h('div', { class: 'lightbox', role: 'dialog', 'aria-modal': 'true', 'aria-label': '이미지 크게 보기', tabindex: '-1', onclick: (e) => { if (e.target === box || e.target === stage) close(); } },
+    h('button', { type: 'button', class: 'lb-close', 'aria-label': '닫기', onclick: close }, svg(ICON.x, 24)),
+    many ? count : null, stage, many ? nav(-1, '이전 이미지') : null, many ? nav(1, '다음 이미지') : null, many ? strip : null);
+  // 손가락으로 밀기
+  let sx = null, sy = 0;
+  stage.addEventListener('touchstart', (e) => { sx = e.touches[0].clientX; sy = e.touches[0].clientY; }, { passive: true });
+  stage.addEventListener('touchmove', (e) => { if (sx !== null) img.style.transform = `translateX(${e.touches[0].clientX - sx}px)`; }, { passive: true });
+  stage.addEventListener('touchend', (e) => {
+    if (sx === null) return;
+    const dx = e.changedTouches[0].clientX - sx, dy = e.changedTouches[0].clientY - sy;
+    img.style.transform = ''; sx = null;
+    if (many && Math.abs(dx) > 50 && Math.abs(dx) > Math.abs(dy)) show(i + (dx < 0 ? 1 : -1));
+  });
+  document.addEventListener('keydown', onKey);
+  document.body.append(box); show(start); box.focus();
 }
-const pics = (urls) => (urls.length ? h('div', { class: `pics${urls.length > 3 ? ' many' : ''}` }, ...urls.map((u, i) => h('img', { src: u, alt: `첨부 이미지 ${i + 1}`, loading: 'lazy', onclick: () => lightbox(u) }))) : null);
+const pics = (urls) => (urls.length ? h('div', { class: `pics${urls.length > 3 ? ' many' : ''}` }, ...urls.map((u, i) => h('img', { src: u, alt: `첨부 이미지 ${i + 1}`, loading: 'lazy', onclick: () => lightbox(urls, i) }))) : null);
 
 async function postView(id) {
   app.replaceChildren(shell('q', [h('div', { class: 'card empty' }, '불러오는 중…')]));
@@ -439,7 +486,7 @@ async function postView(id) {
 
   const ansList = h('ol', { class: 'answers', 'aria-label': '답변' },
     ...answers.map((a) => h('li', { class: 'answer' },
-      h('div', { class: 'row' }, h('span', { class: `who${a.author === '익명(글쓴이)' ? ' op' : ''}` }, a.author, h('span', { style: 'font-weight:400;color:var(--muted);margin-left:6px' }, ago(a.createdAt)), adminTag(a.tag)),
+      h('div', { class: 'row' }, h('span', { class: `who${a.author === '익명(글쓴이)' ? ' op' : ''}` }, a.author, h('span', { style: 'font-weight:400;color:var(--muted);margin-left:6px' }, ago(a.createdAt)), adminTag(a.tag, a.uid)),
         (a.mine || canModerate) ? del('answer', a.id) : null),
       a.body ? h('p', { class: 'body' }, a.body) : null,
       pics(a.images),
@@ -465,7 +512,7 @@ async function postView(id) {
     h('article', { class: 'card post edge' },
       h('div', { class: 'item-tags' }, h('span', { class: `tag c-${post.cat}` }, post.cat), h('span', { class: 'tag' }, subjName(post.subject))),
       h('h2', {}, post.title),
-      h('div', { class: 'meta' }, h('span', {}, `${post.author} · ${ago(post.createdAt)}${post.editedAt ? ' · 수정됨' : ''}`), adminTag(post.tag),
+      h('div', { class: 'meta' }, h('span', {}, `${post.author} · ${ago(post.createdAt)}${post.editedAt ? ' · 수정됨' : ''}`), adminTag(post.tag, post.uid),
         (post.mine && !state.me.banned) || canModerate ? h('button', { type: 'button', class: 'link-btn', onclick: () => editPost(post, () => postView(id)) }, post.mine ? '고치기' : '옮기기') : null,
         (post.mine || canModerate) ? del('post', post.id) : null),
       post.body ? h('p', { class: 'body' }, post.body) : null,
@@ -625,17 +672,92 @@ async function adminView() {
   const roleOf = (u) => (u.isOwner ? '소유자' : u.isAdmin ? '운영자' : '수강생');
   const rows = data.users.map((u) => h('li', { class: `urow${u.banned ? ' banned' : ''}` },
     h('div', { class: 'u-main' },
-      h('b', {}, u.tag), h('span', { class: `role r-${roleOf(u)}` }, roleOf(u)), u.me ? h('span', { class: 'sub' }, '(나)') : null,
+      h('a', { class: 'u-tag', href: `#/admin/user/${u.id}` }, u.tag), h('span', { class: `role r-${roleOf(u)}` }, roleOf(u)), u.me ? h('span', { class: 'sub' }, '(나)') : null,
       u.banned ? h('span', { class: 'role r-ban' }, '글쓰기 제한') : null,
       h('div', { class: 'sub', style: 'font-size:12.5px;width:100%' },
         `글 ${u.posts} · 답변 ${u.answers} · 받은 도움 ${u.helps} · 최근 ${u.lastSeenAt ? ago(u.lastSeenAt) : '기록 없음'} · ${u.hasRecovery ? '복구 코드 있음' : '복구 코드 없음'}${u.passkeys ? ` · 패스키 ${u.passkeys}` : ''}`)),
-    (u.me || u.isOwner) ? null : h('div', { class: 'u-act' },
+    h('div', { class: 'u-act' },
+      h('a', { class: 'btn ghost sm', href: `#/admin/user/${u.id}` }, '글·답변 보기'),
+      ...((u.me || u.isOwner) ? [] : [
       data.canAssignAdmins && !u.banned ? h('button', { type: 'button', class: 'btn ghost sm', onclick: () => patch(u, { admin: !u.isAdmin }, u.isAdmin ? '운영자에서 뺐어요' : '운영자로 지정했어요') }, u.isAdmin ? '운영자 해제' : '운영자 지정') : null,
       (!u.isAdmin || data.canAssignAdmins) ? h('button', { type: 'button', class: `btn ghost sm${u.banned ? '' : ' danger'}`, onclick: () => {
         if (!u.banned && !confirm(`${u.tag} 사용자의 글쓰기를 막을까요?`)) return;
         patch(u, { banned: !u.banned }, u.banned ? '제한을 풀었어요' : '글쓰기를 막았어요');
-      } }, u.banned ? '제한 풀기' : '글쓰기 막기') : null)));
+      } }, u.banned ? '제한 풀기' : '글쓰기 막기') : null]))));
   box.replaceChildren(h('ul', { class: 'ulist' }, ...rows));
+}
+
+// ---------- 알림 ----------
+function paintAlerts() {
+  document.querySelectorAll('.alert-badge').forEach((b) => { b.textContent = state.alerts; b.hidden = !state.alerts; });
+  document.title = state.alerts ? `(${state.alerts}) 익명 라운지` : '익명 라운지';
+}
+async function refreshAlerts() {
+  if (!state.me) return;
+  try { const { unread } = await api('/notifications/count'); if (unread !== state.alerts) { state.alerts = unread; paintAlerts(); } } catch {}
+}
+setInterval(() => document.visibilityState === 'visible' && refreshAlerts(), 45000);
+document.addEventListener('visibilitychange', () => document.visibilityState === 'visible' && refreshAlerts());
+
+async function alertsView() {
+  const list = h('ul', { class: 'list' }, h('li', { class: 'card empty' }, '불러오는 중…'));
+  const readAll = h('button', { type: 'button', class: 'btn ghost sm', onclick: async () => {
+    try { await api('/notifications/read', { method: 'POST' }); state.alerts = 0; alertsView(); } catch (e) { toast(e.message); }
+  } }, '모두 읽음');
+  app.replaceChildren(shell('alerts', [
+    h('header', { class: 'row', style: 'align-items:flex-end;flex-wrap:wrap' }, h('div', {}, h('h1', {}, '알림'), h('p', { class: 'sub' }, '내 글에 답변이 달리면 여기에 모여요.')), readAll),
+    list]));
+  let data;
+  try { data = await api('/notifications'); } catch (e) { list.replaceChildren(h('li', { class: 'card empty' }, e.message)); return; }
+  state.alerts = data.notifications.filter((n) => !n.read).length; paintAlerts();
+  readAll.disabled = !state.alerts;
+  if (!data.notifications.length) { list.replaceChildren(h('li', { class: 'card empty' }, '아직 알림이 없어요. 질문을 올리면 답변이 달릴 때 알려드려요.')); return; }
+  list.replaceChildren(...data.notifications.map((n) => h('li', {},
+    h('a', { class: `card item alert-item edge${n.read ? '' : ' new'}`, href: `#/post/${n.postId}` },
+      h('span', { class: `unread-dot${n.read ? '' : ' on'}`, 'aria-label': n.read ? null : '안 읽음' }),
+      h('div', { class: 'item-main' },
+        h('div', { class: 'alert-line' }, h('b', {}, '내 글에 새 답변'), h('span', { class: 'sub', style: 'margin:0;font-size:13px' }, ago(n.createdAt))),
+        h('div', { class: 'item-title' }, n.postTitle),
+        n.snippet ? h('div', { class: 'item-ex' }, `“${n.snippet}”`) : null)))));
+}
+
+async function adminUserView(uid) {
+  if (!state.me.isAdmin) { location.hash = '#/'; return; }
+  const box = h('div', { style: 'display:flex;flex-direction:column;gap:14px' }, h('div', { class: 'card empty' }, '불러오는 중…'));
+  app.replaceChildren(shell('admin', [h('a', { class: 'back', href: '#/admin' }, svg(ICON.back), '운영'), box]));
+  let d;
+  try { d = await api(`/admin/users/${encodeURIComponent(uid)}/activity`); } catch (e) { box.replaceChildren(h('div', { class: 'card empty' }, e.message)); return; }
+  const u = d.user;
+  const role = u.isOwner ? '소유자' : u.isAdmin ? '운영자' : '수강생';
+  let tab = 'posts';
+  const body = h('div', { class: 'list' });
+  const delTag = (x) => (x ? h('span', { class: 'tag del-tag' }, '지움') : null);
+  const imgTag = (n) => (n ? h('span', { style: 'display:inline-flex;align-items:center;gap:3px' }, svg(ICON.img, 13), n) : null);
+  const draw = () => {
+    tabs.querySelectorAll('button').forEach((b) => b.setAttribute('aria-selected', b.dataset.t === tab ? 'true' : 'false'));
+    const items = tab === 'posts'
+      ? d.posts.map((p) => h('li', { class: `card item edge${p.deleted ? ' gone' : ''}` }, h('div', { class: 'item-main' },
+          h('div', { class: 'item-tags' }, h('span', { class: `tag c-${p.cat}` }, p.cat), h('span', { class: 'tag' }, subjName(p.subject)), delTag(p.deleted)),
+          p.deleted ? h('div', { class: 'item-title' }, p.title) : h('a', { class: 'item-title', href: `#/post/${p.id}` }, p.title),
+          p.excerpt ? h('div', { class: 'item-ex' }, p.excerpt) : null,
+          h('div', { class: 'meta' }, h('span', {}, `${p.realName ? `실명 ${p.realName} · ` : ''}${ago(p.createdAt)}`), h('span', {}, `답변 ${p.answers}`), h('span', {}, `도움 ${p.helps}`), imgTag(p.images)))))
+      : d.answers.map((a) => h('li', { class: `card item edge${a.deleted ? ' gone' : ''}` }, h('div', { class: 'item-main' },
+          h('div', { class: 'item-tags' }, h('span', { class: 'tag' }, '답변'), delTag(a.deleted), a.postDeleted ? h('span', { class: 'tag del-tag' }, '원글 지움') : null),
+          h('div', { class: 'answer-body' }, a.excerpt || '(이미지만)'),
+          h('div', { class: 'meta' },
+            a.postDeleted ? h('span', {}, `원글: ${a.postTitle}`) : h('a', { href: `#/post/${a.postId}` }, `원글: ${a.postTitle}`),
+            h('span', {}, `${a.realName ? `실명 ${a.realName} · ` : ''}${ago(a.createdAt)}`), h('span', {}, `도움 ${a.helps}`), imgTag(a.images)))));
+    body.replaceChildren(...(items.length ? items : [h('div', { class: 'card empty' }, tab === 'posts' ? '쓴 글이 없어요.' : '단 답변이 없어요.')]));
+  };
+  const tabs = h('div', { class: 'chips', role: 'tablist', 'aria-label': '보기' },
+    h('button', { type: 'button', class: 'chip', role: 'tab', 'data-t': 'posts', onclick: () => { tab = 'posts'; draw(); } }, `글 ${d.posts.length}`),
+    h('button', { type: 'button', class: 'chip', role: 'tab', 'data-t': 'answers', onclick: () => { tab = 'answers'; draw(); } }, `답변 ${d.answers.length}`));
+  box.replaceChildren(
+    h('header', {}, h('h1', { class: 'mono-h' }, u.tag),
+      h('p', { class: 'sub' }, `${role}${u.banned ? ' · 글쓰기 제한 중' : ''} · 가입 ${ago(u.createdAt)} · 최근 ${u.lastSeenAt ? ago(u.lastSeenAt) : '기록 없음'}`),
+      h('p', { class: 'sub', style: 'font-size:13px' }, '지운 글·답변도 운영 확인용으로 보여요. 누가 썼는지(실명)는 본인이 실명을 켠 글에만 나와요.')),
+    tabs, body);
+  draw();
 }
 
 // ---------- 라우팅 ----------
@@ -645,10 +767,14 @@ async function render() {
     try { state.me = await api('/me'); } catch { return; }
   }
   if (hash === '#/join') return joinView();
+  refreshAlerts();
   const m = hash.match(/^#\/post\/(\d+)$/);
   if (m) return postView(m[1]);
   if (hash === '#/settings') return settingsView();
   if (hash === '#/admin') return adminView();
+  if (hash === '#/alerts') return alertsView();
+  const au = hash.match(/^#\/admin\/user\/([0-9a-f]+)$/);
+  if (au) return adminUserView(au[1]);
   return listView();
 }
 window.addEventListener('hashchange', render);
