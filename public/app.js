@@ -27,7 +27,7 @@ function applyTheme() {
 function setTheme(pref) { try { localStorage.setItem('al-theme', pref); } catch {} applyTheme(); }
 darkMQ.addEventListener?.('change', () => themePref() === 'system' && applyTheme());
 applyTheme();
-const state = { me: null, unread: {}, subject: null, cat: '전체', alerts: 0 };
+const state = { me: null, unread: {}, subject: null, cat: '전체', alerts: 0, noteUnread: {}, noteScope: 'public', editorDirty: null, curHash: '' };
 
 // ---------- 도구 ----------
 function h(tag, attrs = {}, ...kids) {
@@ -287,7 +287,7 @@ function shell(active, content) {
   const side = h('nav', { class: 'side', 'aria-label': '메뉴' },
     h('div', { class: 'brand' }, '익명 라운지'),
     h('a', { class: 'tab', href: '#/', 'aria-current': active === 'q' ? 'page' : null }, svg(ICON.q, 20), '질문', unreadTotal ? h('span', { class: 'badge' }, unreadTotal) : null),
-    h('span', { class: 'tab', 'aria-disabled': 'true', title: '곧 열려요' }, svg(ICON.note, 20), '정리', h('span', { class: 'soon' }, '준비 중')),
+    h('a', { class: 'tab', href: '#/notes', 'aria-current': active === 'notes' ? 'page' : null }, svg(ICON.note, 20), '정리', h('span', { class: 'badge note-badge', hidden: Object.values(state.noteUnread || {}).reduce((a, b) => a + b, 0) ? null : true }, Object.values(state.noteUnread || {}).reduce((a, b) => a + b, 0))),
     h('span', { class: 'tab', 'aria-disabled': 'true', title: '곧 열려요' }, svg(ICON.quiz, 20), '퀴즈', h('span', { class: 'soon' }, '준비 중')),
     h('a', { class: 'tab desk-only', href: '#/alerts', 'aria-current': active === 'alerts' ? 'page' : null }, svg(ICON.bell, 20), '알림', h('span', { class: 'badge alert-badge', hidden: !state.alerts ? true : null }, state.alerts)),
     state.me?.isAdmin ? h('a', { class: 'tab', href: '#/admin', 'aria-current': active === 'admin' ? 'page' : null, style: 'margin-top:auto' }, svg(ICON.shield, 20), '운영') : null,
@@ -349,13 +349,13 @@ function joinView() {
 }
 
 // ---------- 질문 목록 ----------
-function subjectStrip() {
+function subjectStrip(unreadMap = state.unread) {
   const my = state.me.mySubject;
   const row = h('div', { class: 'strip-row' });
   row.append(
     h('div', { class: 'strip-line base', 'aria-hidden': 'true', style: 'left:128px;right:32px' }),
     h('div', { class: 'strip-line fill', 'aria-hidden': 'true', style: `left:128px;width:${(my - 1) * 64}px` }));
-  const allUnread = Object.values(state.unread).reduce((a, b) => a + b, 0);
+  const allUnread = Object.values(unreadMap).reduce((a, b) => a + b, 0);
   const mk = (key, num, name, unread, cls) => {
     const pressed = state.subject === key;
     return h('button', { type: 'button', class: `subj ${cls}`, 'aria-pressed': pressed ? 'true' : 'false', 'data-key': key,
@@ -368,7 +368,7 @@ function subjectStrip() {
   row.append(mk('all', '전체', '모든 과목', allUnread, 'all'));
   SUBJECTS.forEach((n, i) => {
     const k = i + 1;
-    row.append(mk(k, pad(k), n, state.unread[k] || 0, k === my ? 'now' : k < my ? 'done' : ''));
+    row.append(mk(k, pad(k), n, unreadMap[k] || 0, k === my ? 'now' : k < my ? 'done' : ''));
   });
   const scroller = h('div', { class: 'strip-scroll' }, row);
   requestAnimationFrame(() => {
@@ -794,6 +794,7 @@ function paintAlerts() {
 async function refreshAlerts() {
   if (!state.me) return;
   try { const { unread } = await api('/notifications/count'); if (unread !== state.alerts) { state.alerts = unread; paintAlerts(); } } catch {}
+  refreshNoteUnread();
 }
 setInterval(() => document.visibilityState === 'visible' && refreshAlerts(), 45000);
 document.addEventListener('visibilitychange', () => document.visibilityState === 'visible' && refreshAlerts());
@@ -804,7 +805,7 @@ async function alertsView() {
     try { await api('/notifications/read', { method: 'POST' }); state.alerts = 0; alertsView(); } catch (e) { toast(e.message); }
   } }, '모두 읽음');
   app.replaceChildren(shell('alerts', [
-    h('header', { class: 'row', style: 'align-items:flex-end;flex-wrap:wrap' }, h('div', {}, h('h1', {}, '알림'), h('p', { class: 'sub' }, '내 글에 답변이, 내 답변에 대댓글이 달리면 여기에 모여요.')), readAll),
+    h('header', { class: 'row', style: 'align-items:flex-end;flex-wrap:wrap' }, h('div', {}, h('h1', {}, '알림'), h('p', { class: 'sub' }, '내 글에 답변이, 내 답변에 대댓글이 달리거나 내 공개 정리가 고쳐지면 여기에 모여요.')), readAll),
     list]));
   let data;
   try { data = await api('/notifications'); } catch (e) { list.replaceChildren(h('li', { class: 'card empty' }, e.message)); return; }
@@ -812,10 +813,10 @@ async function alertsView() {
   readAll.disabled = !state.alerts;
   if (!data.notifications.length) { list.replaceChildren(h('li', { class: 'card empty' }, '아직 알림이 없어요. 질문을 올리면 답변이 달릴 때 알려드려요.')); return; }
   list.replaceChildren(...data.notifications.map((n) => h('li', {},
-    h('a', { class: `card item alert-item edge${n.read ? '' : ' new'}`, href: `#/post/${n.postId}` },
+    h('a', { class: `card item alert-item edge${n.read ? '' : ' new'}`, href: n.kind === 'note_edit' ? `#/notes/${n.postId}` : `#/post/${n.postId}` },
       h('span', { class: `unread-dot${n.read ? '' : ' on'}`, 'aria-label': n.read ? null : '안 읽음' }),
       h('div', { class: 'item-main' },
-        h('div', { class: 'alert-line' }, h('b', {}, n.kind === 'reply' ? '내 답변에 대댓글' : '내 글에 새 답변'), h('span', { class: 'sub', style: 'margin:0;font-size:13px' }, ago(n.createdAt))),
+        h('div', { class: 'alert-line' }, h('b', {}, n.kind === 'note_edit' ? '내 정리를 누군가 고쳤어요' : n.kind === 'reply' ? '내 답변에 대댓글' : '내 글에 새 답변'), h('span', { class: 'sub', style: 'margin:0;font-size:13px' }, ago(n.createdAt))),
         h('div', { class: 'item-title' }, n.postTitle),
         n.snippet ? h('div', { class: 'item-ex' }, `“${n.snippet}”`) : null)))));
 }
@@ -859,9 +860,427 @@ async function adminUserView(uid) {
   draw();
 }
 
+// ---------- 정리: 마크다운(안전하게 DOM으로만 그림) ----------
+// 지원: # ## ### 제목(목차 자동), **굵게**, ~~취소~~, `코드`, ```코드 블록```, - 목록, 1. 목록, > 인용, ---,
+//       [글자](https://주소), 주소 자동 링크, [*각주], ![](/api/note-images/번호)
+function mdInline(text, ctx) {
+  const out = [];
+  const re = /(`[^`\n]+`)|(\*\*[^*\n]+\*\*)|(~~[^~\n]+~~)|(!\[[^\]\n]*\]\((\/api\/note-images\/\d+)\))|(\[\*([^\]\n]+)\])|(\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\))|(https?:\/\/[^\s<>()]+[^\s<>().,!?])/g;
+  let last = 0, m;
+  while ((m = re.exec(text))) {
+    if (m.index > last) out.push(text.slice(last, m.index));
+    if (m[1]) out.push(h('code', {}, m[1].slice(1, -1)));
+    else if (m[2]) out.push(h('strong', {}, ...mdInline(m[2].slice(2, -2), ctx)));
+    else if (m[3]) out.push(h('del', {}, m[3].slice(2, -2)));
+    else if (m[4]) { const src = m[5]; ctx.images.push(src); const k = ctx.images.length - 1; out.push(h('img', { class: 'md-img', src, alt: '정리 이미지', loading: 'lazy', onclick: () => lightbox(ctx.images, k) })); }
+    else if (m[6] && ctx.notes) {
+      const n = ctx.notes.push(m[7]);
+      out.push(h('sup', { class: 'fn-ref' }, h('button', { type: 'button', id: `${ctx.pre}fr${n}`, 'aria-label': `각주 ${n}`, onclick: () => document.getElementById(`${ctx.pre}fn${n}`)?.scrollIntoView({ block: 'center', behavior: 'smooth' }) }, `[${n}]`)));
+    }
+    else if (m[8]) out.push(h('a', { href: m[10], target: '_blank', rel: 'noopener noreferrer' }, m[9]));
+    else if (m[11]) out.push(h('a', { href: m[11], target: '_blank', rel: 'noopener noreferrer' }, m[11]));
+    last = re.lastIndex;
+  }
+  if (last < text.length) out.push(text.slice(last));
+  return out;
+}
+let mdSeq = 0;
+function renderMd(md, { withToc = true } = {}) {
+  const ctx = { notes: [], images: [], pre: `m${++mdSeq}-` };
+  const root = h('div', { class: 'md' });
+  const toc = [];
+  const counters = [0, 0, 0];
+  const lines = String(md || '').replace(/\r\n/g, '\n').split('\n');
+  // 가장 큰 제목을 1단계로 (## 만 써도 1. 2. 3.)
+  let minLv = 3, inCode = false;
+  for (const l of lines) { if (/^```/.test(l)) inCode = !inCode; else if (!inCode) { const hm = l.match(/^(#{1,3})\s+/); if (hm) minLv = Math.min(minLv, hm[1].length); } }
+  let para = [];
+  const flush = () => { if (para.length) { const p = h('p', {}); para.forEach((l, i) => { if (i) p.append(h('br')); p.append(...mdInline(l, ctx)); }); root.append(p); para = []; } };
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    let m;
+    if (/^```/.test(line)) {
+      flush();
+      const buf = [];
+      while (++i < lines.length && !/^```/.test(lines[i])) buf.push(lines[i]);
+      root.append(h('pre', {}, h('code', {}, buf.join('\n'))));
+    } else if ((m = line.match(/^(#{1,3})\s+(.+)$/))) {
+      flush();
+      const lv = m[1].length - minLv + 1;
+      counters[lv - 1]++; for (let k = lv; k < 3; k++) counters[k] = 0;
+      const num = counters.slice(0, lv).map((c) => c || 1).join('.');
+      const id = `${ctx.pre}s${toc.length + 1}`;
+      toc.push({ lv, num, text: m[2].replace(/\[\*[^\]]*\]/g, ''), id });
+      root.append(h(`h${m[1].length + 1}`, { id }, h('span', { class: 'h-num' }, `${num}.`), ...mdInline(m[2], ctx)));
+    } else if (/^\s*([-*])\s+/.test(line) || /^\s*\d+\.\s+/.test(line)) {
+      flush();
+      const ordered = /^\s*\d+\.\s+/.test(line);
+      const list = h(ordered ? 'ol' : 'ul', {});
+      while (i < lines.length && (ordered ? /^\s*\d+\.\s+/ : /^\s*[-*]\s+/).test(lines[i])) {
+        const raw = lines[i];
+        const item = h('li', {}, ...mdInline(raw.replace(ordered ? /^\s*\d+\.\s+/ : /^\s*[-*]\s+/, ''), ctx));
+        if (/^\s{2,}/.test(raw)) item.classList.add('sub-li');
+        list.append(item); i++;
+      }
+      i--; root.append(list);
+    } else if (/^>\s?/.test(line)) {
+      flush();
+      const q = h('blockquote', {});
+      while (i < lines.length && /^>\s?/.test(lines[i])) { if (q.childNodes.length) q.append(h('br')); q.append(...mdInline(lines[i].replace(/^>\s?/, ''), ctx)); i++; }
+      i--; root.append(q);
+    } else if (/^\s*-{3,}\s*$/.test(line)) { flush(); root.append(h('hr')); }
+    else if (!line.trim()) flush();
+    else para.push(line);
+  }
+  flush();
+  if (ctx.notes.length) {
+    root.append(h('div', { class: 'fn-list' }, h('div', { class: 'fn-title' }, '각주'),
+      h('ol', {}, ...ctx.notes.map((t, k) => h('li', { id: `${ctx.pre}fn${k + 1}` },
+        h('button', { type: 'button', class: 'fn-back', 'aria-label': '본문으로', onclick: () => document.getElementById(`${ctx.pre}fr${k + 1}`)?.scrollIntoView({ block: 'center', behavior: 'smooth' }) }, `[${k + 1}]`), ' ', ...mdInline(t, { ...ctx, notes: null }))))));
+  }
+  if (withToc && toc.length >= 2) {
+    const box = h('nav', { class: 'toc', 'aria-label': '목차' }, h('div', { class: 'toc-title' }, '목차'),
+      h('ol', {}, ...toc.map((t) => h('li', { class: `lv${t.lv}` }, h('button', { type: 'button', onclick: () => document.getElementById(t.id)?.scrollIntoView({ block: 'start', behavior: 'smooth' }) }, h('span', { class: 'toc-num' }, `${t.num}.`), t.text)))));
+    root.prepend(box);
+  }
+  return root;
+}
+
+// 줄 단위로 바뀐 부분 (고친 기록 비교용)
+function lineDiff(a, b) {
+  const A = a.split('\n'), B = b.split('\n');
+  if (A.length * B.length > 4e6) return [{ t: '-', s: '(너무 길어서 비교를 생략했어요)' }];
+  const dp = Array.from({ length: A.length + 1 }, () => new Uint16Array(B.length + 1));
+  for (let i = A.length - 1; i >= 0; i--) for (let j = B.length - 1; j >= 0; j--) dp[i][j] = A[i] === B[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1]);
+  const out = []; let i = 0, j = 0;
+  while (i < A.length && j < B.length) {
+    if (A[i] === B[j]) { out.push({ t: ' ', s: A[i] }); i++; j++; }
+    else if (dp[i + 1][j] >= dp[i][j + 1]) out.push({ t: '-', s: A[i++] });
+    else out.push({ t: '+', s: B[j++] });
+  }
+  while (i < A.length) out.push({ t: '-', s: A[i++] });
+  while (j < B.length) out.push({ t: '+', s: B[j++] });
+  return out;
+}
+function diffView(prev, cur) {
+  const rows = lineDiff(prev, cur);
+  const changed = rows.filter((r) => r.t !== ' ').length;
+  // 바뀐 줄 앞뒤 2줄만 보여주기
+  const keep = rows.map((r, k) => r.t !== ' ' || rows.slice(Math.max(0, k - 2), k + 3).some((x) => x.t !== ' '));
+  const el = h('div', { class: 'diff', 'aria-label': '바뀐 부분' });
+  let gap = false;
+  rows.forEach((r, k) => {
+    if (!keep[k]) { if (!gap) { el.append(h('div', { class: 'diff-gap' }, '⋯')); gap = true; } return; }
+    gap = false;
+    el.append(h('div', { class: `diff-row ${r.t === '+' ? 'add' : r.t === '-' ? 'del' : ''}` }, h('span', { class: 'diff-mark', 'aria-label': r.t === '+' ? '추가' : r.t === '-' ? '삭제' : null }, r.t === ' ' ? '' : r.t), r.s || ' '));
+  });
+  return changed ? el : h('div', { class: 'sub' }, '내용은 그대로이고 제목만 바뀌었어요.');
+}
+
+// ---------- 정리: 목록 ----------
+async function refreshNoteUnread() {
+  try { const { unread } = await api('/notes/subjects'); state.noteUnread = unread; paintNoteBadge(); } catch {}
+}
+function paintNoteBadge() {
+  const n = Object.values(state.noteUnread || {}).reduce((a, b) => a + b, 0);
+  document.querySelectorAll('.note-badge').forEach((b) => { b.textContent = n; b.hidden = !n; });
+}
+const visTag = (v) => h('span', { class: `tag vis-${v}` }, v === 'public' ? '공개 정리' : '나만 보기');
+
+async function notesView() {
+  if (state.subject === null) state.subject = state.me.mySubject;
+  state.noteScope = state.noteScope || 'public';
+  const scope = state.noteScope;
+  const list = h('ul', { class: 'list' }, h('li', { class: 'card empty' }, '불러오는 중…'));
+  const tabs = h('div', { class: 'chips', role: 'tablist', 'aria-label': '정리 보기' },
+    ...[['public', '공개 정리'], ['mine', '내 노트']].map(([k, label]) => h('button', { type: 'button', class: 'chip', role: 'tab', 'aria-selected': scope === k ? 'true' : 'false', onclick: () => { state.noteScope = k; render(); } }, label)));
+  const subj = state.subject === 'all' ? state.me.mySubject : state.subject;
+  const newBar = state.me.banned ? bannedNote() : h('a', { class: 'card compose-bar edge', href: `#/notes/new/${subj}` },
+    h('span', { class: 'pen', 'aria-hidden': 'true' }, svg(ICON.note, 17)),
+    h('span', { class: 'ph' }, `${subjName(subj)} · 배운 내용을 정리해 보세요`),
+    h('span', { class: 'go', 'aria-hidden': 'true' }, '새 정리'));
+  app.replaceChildren(shell('notes', [
+    h('header', {}, h('h1', {}, '정리'), h('p', { class: 'sub' }, scope === 'public' ? '공개 정리는 모두가 함께 고치고 더해요. 고친 기록이 다 남아요.' : '내 노트는 나만 볼 수 있어요. 공개하면 다른 사람도 고칠 수 있어요.')),
+    subjectStrip(state.noteUnread || {}), tabs, newBar, list]));
+  try {
+    const q = new URLSearchParams({ subject: state.subject, scope });
+    const { notes } = await api(`/notes?${q}`);
+    refreshNoteUnread().then(() => {
+      document.querySelectorAll('.subj').forEach((btn) => {
+        const k = btn.dataset.key; const u = state.noteUnread || {};
+        const n = k === 'all' ? Object.values(u).reduce((a, b) => a + b, 0) : u[k] || 0;
+        const node = btn.querySelector('.node'); node.querySelector('.badge')?.remove();
+        if (n) node.append(h('span', { class: 'badge' }, n));
+      });
+    });
+    if (!notes.length) {
+      list.replaceChildren(h('li', { class: 'card empty' }, scope === 'public' ? '이 과목에는 아직 공개 정리가 없어요. 첫 정리를 남겨보세요!' : '아직 쓴 노트가 없어요. 수업 내용을 나만 보는 노트로 정리해 보세요.'));
+      return;
+    }
+    list.replaceChildren(...notes.map((n) => h('li', { class: 'card item edge' },
+      h('span', { class: `unread-dot${n.unread ? ' on' : ''}`, 'aria-label': n.unread ? '새로 바뀜' : null }),
+      h('div', { class: 'item-main' },
+        h('div', { class: 'item-tags' }, h('span', { class: 'tag' }, subjName(n.subject)), scope === 'mine' ? visTag(n.visibility) : null),
+        h('a', { class: 'item-title', href: `#/notes/${n.id}` }, n.title),
+        n.excerpt ? h('div', { class: 'item-ex' }, n.excerpt) : null,
+        h('div', { class: 'meta' },
+          h('span', {}, `${n.contributors > 1 ? `${n.contributors}명이 함께 정리` : n.mine ? '내가 정리' : '익명이 정리'} · ${ago(n.updatedAt)} 고침`),
+          adminTag(n.tag),
+          n.helps ? h('span', { style: 'display:inline-flex;align-items:center;gap:3px' }, svg(ICON.thumb, 13), n.helps) : null)))));
+  } catch (e) { list.replaceChildren(h('li', { class: 'card empty' }, e.message)); }
+}
+
+// ---------- 정리: 보기 ----------
+async function noteView(id) {
+  app.replaceChildren(shell('notes', [h('div', { class: 'card empty' }, '불러오는 중…')]));
+  let d;
+  try { d = await api(`/notes/${id}`); } catch (e) { app.replaceChildren(shell('notes', [h('a', { class: 'back', href: '#/notes' }, svg(ICON.back), '정리'), h('div', { class: 'card empty' }, e.message)])); return; }
+  const { note: n } = d;
+  refreshAlerts();
+  const act = (label, fn, cls = 'link-btn') => h('button', { type: 'button', class: cls, onclick: fn }, label);
+  const setVis = async (pub) => {
+    if (pub && !confirm('공개하면 다른 수강생이 이 정리를 보고 고칠 수 있어요. 고친 기록은 모두 남아요. 공개할까요?')) return;
+    try { await api(`/notes/${id}/visibility`, { method: 'PATCH', body: { public: pub } }); toast(pub ? '공개 정리로 올렸어요' : '나만 보기로 바꿨어요'); noteView(id); } catch (e) { toast(e.message); }
+  };
+  const help = h('button', { type: 'button', class: 'help', 'aria-pressed': n.helped ? 'true' : 'false', disabled: n.mine || n.visibility !== 'public' ? true : null, title: n.mine ? '내 정리에는 누를 수 없어요' : null },
+    svg(ICON.thumb, 14), `도움됐어요 ${n.helps}`);
+  help.addEventListener('click', async () => {
+    try { const r = await api(`/notes/${id}/help`, { method: 'POST' }); help.setAttribute('aria-pressed', r.helped ? 'true' : 'false'); help.lastChild.textContent = `도움됐어요 ${r.helps}`; } catch (e) { toast(e.message); }
+  });
+  app.replaceChildren(shell('notes', [
+    h('a', { class: 'back', href: '#/notes' }, svg(ICON.back), '정리'),
+    h('article', { class: 'card post note edge' },
+      h('div', { class: 'item-tags' }, h('span', { class: 'tag' }, subjName(n.subject)), visTag(n.visibility)),
+      h('h2', {}, n.title),
+      h('div', { class: 'meta' },
+        h('span', {}, `${n.lastEditor} · ${ago(n.updatedAt)} 고침 · ${n.rev}번째 기록`), adminTag(n.tag, n.uid),
+        d.canEdit ? h('a', { class: 'btn sm', href: `#/notes/${id}/edit` }, '고치기') : null,
+        h('a', { class: 'link-btn', href: `#/notes/${id}/history` }, '고친 기록'),
+        d.canMakePublic ? act('공개하기', () => setVis(true)) : null,
+        d.canMakePrivate ? act('나만 보기로', () => setVis(false)) : null,
+        d.canDelete ? act('지우기', async () => {
+          if (!confirm('이 정리를 지울까요?')) return;
+          try { await api(`/notes/${id}`, { method: 'DELETE' }); toast('지웠어요'); location.hash = '#/notes'; } catch (e) { toast(e.message); }
+        }) : null),
+      n.body ? renderMd(n.body) : h('p', { class: 'sub' }, '아직 내용이 없어요.'),
+      h('div', { class: 'note-foot' },
+        n.visibility === 'public' ? h('div', { class: 'contribs' }, h('span', { class: 'sub', style: 'margin:0;font-size:13px' }, '함께 정리한 사람'),
+          ...n.contributors.map((c) => h('span', { class: `contrib${c.me ? ' me' : ''}` }, c.name, h('small', {}, ` ${c.edits}번`), c.tag ? adminTag(c.tag, c.uid) : null))) : null,
+        n.visibility === 'public' ? help : null)),
+  ]));
+}
+
+// ---------- 정리: 쓰기·고치기 ----------
+function noteEditor(id, newSubject) {
+  const isNew = !id;
+  const draftKey = `al-draft-note-${id || 'new'}`;
+  let baseRev = 1, noteId = id ? Number(id) : null, dirty = false, saving = false;
+  const subj = h('select', { 'aria-label': '과목' }, ...SUBJECTS.map((nm, i) => h('option', { value: i + 1 }, `${pad(i + 1)} ${nm}`)));
+  subj.value = String(newSubject || (state.subject === 'all' || !state.subject ? state.me.mySubject : state.subject));
+  const title = h('input', { class: 'plain title-in note-title', type: 'text', maxlength: '100', placeholder: '제목 (예: 프롬프트 플로우 배포 정리)', 'aria-label': '제목' });
+  const body = h('textarea', { class: 'plain note-body', rows: '16', maxlength: '50000', 'aria-label': '내용',
+    placeholder: '## 큰 제목\n배운 내용을 자유롭게 적어요.\n\n- 목록은 - 로 시작\n**굵게**, `코드`, 각주는 [*설명]\n캡처는 Ctrl + V로 붙여넣어요.' });
+  const summary = h('input', { class: 'note-summary', type: 'text', maxlength: '60', placeholder: '무엇을 고쳤나요? (선택, 예: 오타 수정, 3장 예시 추가)', 'aria-label': '고친 내용 한 줄 설명' });
+  let vis = 'private';
+  const visBox = isNew ? h('div', { class: 'radios', role: 'radiogroup', 'aria-label': '공개 범위' },
+    ...[['private', '나만 보기'], ['public', '공개 정리 (모두가 고칠 수 있어요)']].map(([v, label]) => h('label', { class: 'radio' }, h('input', { type: 'radio', name: 'note-vis', value: v, checked: v === vis ? true : null, onchange: () => { vis = v; } }), label))) : null;
+  const preview = h('div', { class: 'note-preview card', 'aria-label': '미리보기' });
+  const drawPreview = () => preview.replaceChildren(body.value.trim() ? renderMd(body.value) : h('p', { class: 'sub' }, '여기에 미리보기가 보여요.'));
+  let pvTimer;
+  const markDirty = () => {
+    dirty = true; clearTimeout(pvTimer);
+    pvTimer = setTimeout(() => { drawPreview(); try { localStorage.setItem(draftKey, JSON.stringify({ title: title.value, body: body.value, at: Date.now(), baseRev })); } catch {} }, 300);
+  };
+  title.addEventListener('input', markDirty); body.addEventListener('input', markDirty);
+
+  // 도구 막대
+  const wrapSel = (before, after = before, ph = '글자') => {
+    const s = body.selectionStart, e = body.selectionEnd, sel = body.value.slice(s, e) || ph;
+    body.setRangeText(before + sel + after, s, e, 'end');
+    body.setSelectionRange(s + before.length, s + before.length + sel.length); body.focus(); markDirty();
+  };
+  const prefixLines = (prefix) => {
+    const s = body.value.lastIndexOf('\n', body.selectionStart - 1) + 1;
+    let e = body.value.indexOf('\n', body.selectionEnd); if (e < 0) e = body.value.length;
+    const block = body.value.slice(s, e).split('\n').map((l, k) => (typeof prefix === 'function' ? prefix(k) : prefix) + l.replace(/^(#{1,3}\s+|[-*]\s+|\d+\.\s+|>\s?)/, '')).join('\n');
+    body.setRangeText(block, s, e, 'end'); body.focus(); markDirty();
+  };
+  const tb = (label, title2, fn) => h('button', { type: 'button', class: 'tb-btn', title: title2, 'aria-label': title2, onmousedown: (e) => e.preventDefault(), onclick: fn }, label);
+  const toolbar = h('div', { class: 'note-toolbar', role: 'toolbar', 'aria-label': '꾸미기' },
+    tb('제목', '큰 제목 (목차에 나와요)', () => prefixLines('## ')),
+    tb('소제목', '작은 제목', () => prefixLines('### ')),
+    tb(h('b', {}, 'B'), '굵게', () => wrapSel('**')),
+    tb(h('code', {}, '<>'), '코드', () => wrapSel('`', '`', 'code')),
+    tb('{ }', '코드 블록', () => wrapSel('\n```\n', '\n```\n', '코드를 붙여넣어요')),
+    tb('• 목록', '글머리 목록', () => prefixLines('- ')),
+    tb('1. 목록', '번호 목록', () => prefixLines((k) => `${k + 1}. `)),
+    tb('❝', '인용', () => prefixLines('> ')),
+    tb('각주', '각주 [*설명]', () => wrapSel('[*', ']', '설명')),
+    tb('링크', '링크', () => wrapSel('[', '](https://)', '보일 글자')),
+    emojiButton(body));
+
+  // 캡처 붙여넣기 → 업로드 → 본문에 이미지 넣기 (새 정리면 먼저 저장)
+  async function ensureSaved() {
+    if (noteId) return noteId;
+    const r = await api('/notes', { method: 'POST', body: { subject: Number(subj.value), title: title.value, body: body.value, visibility: vis } });
+    noteId = r.id; baseRev = r.rev; dirty = false;
+    try { localStorage.removeItem(draftKey); } catch {}
+    history.replaceState(null, '', `#/notes/${noteId}/edit`);
+    return noteId;
+  }
+  async function addImages(files) {
+    for (const f of files) {
+      if (!f.type.startsWith('image/')) continue;
+      let nid;
+      try { nid = await ensureSaved(); } catch (e) { toast(e.message); return; }
+      const mark = `![업로드 중…]()`;
+      body.setRangeText(`\n${mark}\n`, body.selectionStart, body.selectionEnd, 'end');
+      try {
+        const c = await compressImage(f);
+        const res = await fetch(`/api/notes/${nid}/images`, { method: 'POST', headers: { 'content-type': c.mime }, body: c.blob, credentials: 'same-origin' });
+        const j = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(j.error || '이미지를 올리지 못했어요.');
+        body.value = body.value.replace(mark, `![](${j.url})`);
+      } catch (e) { body.value = body.value.replace(`\n${mark}\n`, '\n'); toast(e.message); }
+      markDirty();
+    }
+  }
+  body.addEventListener('paste', (e) => {
+    const files = [...(e.clipboardData?.files || [])].filter((f) => f.type.startsWith('image/'));
+    if (files.length) { e.preventDefault(); addImages(files); }
+  });
+  body.addEventListener('drop', (e) => { const files = [...(e.dataTransfer?.files || [])]; if (files.length) { e.preventDefault(); addImages(files); } });
+  const picker = h('input', { type: 'file', accept: 'image/png,image/jpeg,image/webp', multiple: true, class: 'sr', tabindex: '-1', 'aria-hidden': 'true' });
+  picker.addEventListener('change', () => { addImages([...picker.files]); picker.value = ''; });
+  toolbar.append(tb('🖼 이미지', '이미지 넣기 (Ctrl + V도 돼요)', () => picker.click()), picker);
+
+  // 탭: 쓰기 / 미리보기 (넓은 화면에서는 나란히)
+  const pane = h('div', { class: 'note-panes' }, h('div', { class: 'note-write' }, toolbar, body), preview);
+  const modeTabs = h('div', { class: 'chips mode-tabs', role: 'tablist', 'aria-label': '보기 방식' },
+    ...[['write', '쓰기'], ['preview', '미리보기']].map(([k, label]) => h('button', { type: 'button', class: 'chip', role: 'tab', 'data-k': k, 'aria-selected': k === 'write' ? 'true' : 'false',
+      onclick: () => { pane.dataset.mode = k; modeTabs.querySelectorAll('button').forEach((b) => b.setAttribute('aria-selected', b.dataset.k === k ? 'true' : 'false')); if (k === 'preview') drawPreview(); } }, label)));
+  pane.dataset.mode = 'write';
+
+  const conflictBox = h('div', { class: 'warn conflict', hidden: true });
+  const save = h('button', { class: 'btn', type: 'button' }, isNew ? '저장' : '고친 내용 저장');
+  async function doSave(force) {
+    if (saving) return;
+    if (!title.value.trim()) { title.focus(); toast('제목을 써주세요.'); return; }
+    saving = true; save.disabled = true;
+    try {
+      if (!noteId) await ensureSaved();
+      else {
+        const res = await fetch(`/api/notes/${noteId}`, { method: 'PUT', headers: { 'content-type': 'application/json' }, credentials: 'same-origin',
+          body: JSON.stringify({ title: title.value, body: body.value, baseRev, summary: summary.value }) });
+        const j = await res.json().catch(() => ({}));
+        if (res.status === 409 && j.conflict) { showConflict(j.current); return; }
+        if (!res.ok) throw new Error(j.error || '저장하지 못했어요.');
+        baseRev = j.rev;
+      }
+      dirty = false;
+      try { localStorage.removeItem(draftKey); } catch {}
+      toast(isNew ? '정리를 저장했어요' : '고친 내용을 저장했어요');
+      state.editorDirty = null;
+      location.hash = `#/notes/${noteId}`;
+    } catch (e) { toast(e.message); }
+    finally { saving = false; save.disabled = false; }
+  }
+  function showConflict(cur) {
+    conflictBox.hidden = false;
+    conflictBox.replaceChildren(
+      h('b', {}, '그사이 다른 사람이 이 정리를 고쳤어요.'),
+      h('p', { style: 'margin:6px 0' }, '내가 쓴 내용은 아직 그대로 있어요. 어떻게 할까요?'),
+      h('details', {}, h('summary', {}, '바뀐 부분 보기 (최신 ↔ 내 글)'), diffView(cur.body, body.value)),
+      h('div', { style: 'display:flex;gap:8px;flex-wrap:wrap;margin-top:8px' },
+        h('button', { type: 'button', class: 'btn sm', onclick: () => { baseRev = cur.rev; conflictBox.hidden = true; doSave(true); } }, '내 글로 저장 (최신 내용 덮어쓰기)'),
+        h('button', { type: 'button', class: 'btn ghost sm', onclick: async () => {
+          try { await navigator.clipboard.writeText(body.value); toast('내 글을 복사해 뒀어요. 최신 내용에 필요한 부분만 붙여넣으세요.'); } catch { toast('내 글을 먼저 따로 복사해 두세요.'); return; }
+          title.value = cur.title; body.value = cur.body; baseRev = cur.rev; conflictBox.hidden = true; drawPreview();
+        } }, '최신 내용 불러오기 (내 글은 복사)')));
+    conflictBox.scrollIntoView({ block: 'center' });
+  }
+  save.addEventListener('click', () => doSave());
+  const cancel = h('a', { class: 'btn ghost', href: noteId ? `#/notes/${noteId}` : '#/notes' }, '취소');
+
+  const form = h('section', { class: 'card note-editor edge', 'aria-label': isNew ? '새 정리' : '정리 고치기' },
+    h('div', { class: 'radios' }, subj, visBox),
+    title, modeTabs, pane,
+    isNew ? null : summary,
+    conflictBox,
+    h('div', { class: 'comp-foot' }, h('span', { class: 'hint' }, isNew ? '나만 보기로 저장해도 나중에 공개할 수 있어요.' : '저장하면 고친 기록에 남아요.'), cancel, save));
+  app.replaceChildren(shell('notes', [
+    h('a', { class: 'back', href: noteId ? `#/notes/${noteId}` : '#/notes' }, svg(ICON.back), noteId ? '정리로' : '정리'),
+    h('h1', {}, isNew ? '새 정리' : '정리 고치기'), form]));
+
+  const offerDraft = (serverBody) => {
+    let dr = null; try { dr = JSON.parse(localStorage.getItem(draftKey) || 'null'); } catch {}
+    if (dr && (dr.body !== serverBody) && (dr.body || dr.title)) {
+      const bar = h('div', { class: 'warn' }, `저장 안 된 글이 있어요 (${ago(dr.at)}). `,
+        h('button', { type: 'button', class: 'link-btn', onclick: () => { title.value = dr.title; body.value = dr.body; if (dr.baseRev) baseRev = dr.baseRev; dirty = true; drawPreview(); bar.remove(); } }, '불러오기'),
+        h('button', { type: 'button', class: 'link-btn', onclick: () => { try { localStorage.removeItem(draftKey); } catch {} bar.remove(); } }, '버리기'));
+      form.prepend(bar);
+    }
+  };
+  if (noteId) {
+    api(`/notes/${noteId}`).then((d) => {
+      if (!d.canEdit) { toast('고칠 수 없는 정리예요.'); location.hash = `#/notes/${noteId}`; return; }
+      title.value = d.note.title; body.value = d.note.body; baseRev = d.note.rev; subj.value = String(d.note.subject); subj.disabled = true;
+      drawPreview(); offerDraft(d.note.body);
+    }).catch((e) => toast(e.message));
+  } else { drawPreview(); offerDraft(''); title.focus(); }
+  state.editorDirty = () => dirty;
+}
+
+// ---------- 정리: 고친 기록 ----------
+async function noteHistoryView(id, rev) {
+  app.replaceChildren(shell('notes', [h('div', { class: 'card empty' }, '불러오는 중…')]));
+  try {
+    if (!rev) {
+      const d = await api(`/notes/${id}/revisions`);
+      app.replaceChildren(shell('notes', [
+        h('a', { class: 'back', href: `#/notes/${id}` }, svg(ICON.back), '정리로'),
+        h('header', {}, h('h1', {}, '고친 기록'), h('p', { class: 'sub' }, `${d.title} · 모두 ${d.revisions.length}번`)),
+        h('ul', { class: 'list' }, ...d.revisions.map((r) => h('li', {}, h('a', { class: 'card item rev-item edge', href: `#/notes/${id}/history/${r.rev}` },
+          h('div', { class: 'item-main' },
+            h('div', { class: 'alert-line' }, h('b', {}, `${r.rev}번째`), r.rev === d.current ? h('span', { class: 'tag vis-public' }, '지금') : null, h('span', { class: 'sub', style: 'margin:0;font-size:13px' }, ago(r.createdAt))),
+            h('div', {}, `${r.who}${r.me ? ' (나)' : ''}${r.summary ? ` · ${r.summary}` : ''}`),
+            h('div', { class: `delta ${r.delta >= 0 ? 'plus' : 'minus'}` }, `${r.delta >= 0 ? '+' : ''}${r.delta}글자`))))))]));
+      return;
+    }
+    const r = await api(`/notes/${id}/revisions/${rev}`);
+    let showDiff = true;
+    const area = h('div');
+    const draw = () => area.replaceChildren(showDiff ? diffView(r.prevBody, r.body) : renderMd(r.body));
+    const toggle = h('div', { class: 'chips', role: 'tablist' },
+      ...[[true, '바뀐 부분'], [false, '이때 모습']].map(([v, label]) => h('button', { type: 'button', class: 'chip', role: 'tab', 'aria-selected': v ? 'true' : 'false',
+        onclick: (e) => { showDiff = v; toggle.querySelectorAll('button').forEach((b) => b.setAttribute('aria-selected', b === e.currentTarget ? 'true' : 'false')); draw(); } }, label)));
+    const revert = r.rev !== r.current && !state.me.banned ? h('button', { type: 'button', class: 'btn ghost sm', onclick: async () => {
+      if (!confirm(`${r.rev}번째 기록으로 되돌릴까요? 지금 내용도 기록에 남아 있어서 언제든 다시 돌아올 수 있어요.`)) return;
+      try { await api(`/notes/${id}/revert`, { method: 'POST', body: { rev: r.rev } }); toast('되돌렸어요'); location.hash = `#/notes/${id}`; } catch (e) { toast(e.message); }
+    } }, '이 기록으로 되돌리기') : null;
+    app.replaceChildren(shell('notes', [
+      h('a', { class: 'back', href: `#/notes/${id}/history` }, svg(ICON.back), '고친 기록'),
+      h('article', { class: 'card post note edge' },
+        h('div', { class: 'item-tags' }, h('span', { class: 'tag' }, `${r.rev}번째 기록`), r.rev === r.current ? h('span', { class: 'tag vis-public' }, '지금') : null),
+        h('h2', {}, r.title),
+        h('div', { class: 'meta' }, h('span', {}, `${r.who} · ${ago(r.createdAt)}${r.summary ? ` · ${r.summary}` : ''}`), revert),
+        toggle, area)]));
+    draw();
+  } catch (e) {
+    app.replaceChildren(shell('notes', [h('a', { class: 'back', href: `#/notes/${id}` }, svg(ICON.back), '정리로'), h('div', { class: 'card empty' }, e.message)]));
+  }
+}
+
 // ---------- 라우팅 ----------
+window.addEventListener('beforeunload', (e) => { if (state.editorDirty?.()) { e.preventDefault(); e.returnValue = ''; } });
 async function render() {
   const hash = location.hash || '#/';
+  // 정리를 쓰다가 저장 안 하고 나가려 하면 확인
+  if (state.editorDirty && hash !== state.curHash) {
+    if (state.editorDirty() && !confirm('저장하지 않은 내용이 있어요. 나갈까요? (임시 저장은 남아 있어요)')) { history.replaceState(null, '', state.curHash); return; }
+    state.editorDirty = null;
+  }
+  state.curHash = hash;
   if (!state.me && hash !== '#/join') {
     try { state.me = await api('/me'); } catch { return; }
   }
@@ -872,6 +1291,12 @@ async function render() {
   if (hash === '#/settings') return settingsView();
   if (hash === '#/admin') return adminView();
   if (hash === '#/alerts') return alertsView();
+  if (hash === '#/notes') return notesView();
+  let nm;
+  if ((nm = hash.match(/^#\/notes\/new(?:\/(\d+))?$/))) return noteEditor(null, nm[1]);
+  if ((nm = hash.match(/^#\/notes\/(\d+)\/edit$/))) return noteEditor(nm[1]);
+  if ((nm = hash.match(/^#\/notes\/(\d+)\/history(?:\/(\d+))?$/))) return noteHistoryView(nm[1], nm[2]);
+  if ((nm = hash.match(/^#\/notes\/(\d+)$/))) return noteView(nm[1]);
   const au = hash.match(/^#\/admin\/user\/([0-9a-f]+)$/);
   if (au) return adminUserView(au[1]);
   return listView();

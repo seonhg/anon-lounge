@@ -1,6 +1,7 @@
 // 익명 라운지 API — Cloudflare Pages Functions
 // 필요한 설정: D1 바인딩 이름 DB, 환경 변수 INVITE_CODE(반 공용 코드), ADMIN_CODE(소유자 최초 등록용)
 import { b64urlToBytes, bytesToB64url, verifyRegistration, verifyAuthentication } from '../_lib/webauthn.js';
+import { NOTE_SCHEMA, handleNotes, noteHelpsReceived } from '../_lib/notes.js';
 
 const CATS = ['질문', '잡담', '건의'];
 const TIERS = [
@@ -131,7 +132,7 @@ async function ensureSchema(env) {
         'CREATE TABLE IF NOT EXISTS notifications (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT NOT NULL, kind TEXT NOT NULL, post_id INTEGER NOT NULL, answer_id INTEGER, created_at INTEGER NOT NULL, read_at INTEGER NOT NULL DEFAULT 0)',
         'CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications(user_id, created_at DESC)',
       ];
-      for (const s of stmts) await db.prepare(s).run();
+      for (const s of [...stmts, ...NOTE_SCHEMA]) await db.prepare(s).run();
       const { results: cols } = await db.prepare('PRAGMA table_info(users)').all();
       const have = new Set(cols.map((c) => c.name));
       const add = [
@@ -186,7 +187,7 @@ async function receivedHelps(env, userId) {
     `SELECT (SELECT COALESCE(SUM(help_count), 0) FROM posts WHERE user_id = ?1 AND deleted = 0) +
             (SELECT COALESCE(SUM(help_count), 0) FROM answers WHERE user_id = ?1 AND deleted = 0) AS n`
   ).bind(userId).first();
-  return row ? row.n : 0;
+  return (row ? row.n : 0) + (await noteHelpsReceived(env, userId));
 }
 async function meView(env, user) {
   const pk = await env.DB.prepare('SELECT COUNT(*) AS n FROM passkeys WHERE user_id = ?').bind(user.id).first();
@@ -447,17 +448,24 @@ export async function onRequest(context) {
 
     // 알림
     if (parts[0] === 'notifications') {
-      const alive = `EXISTS (SELECT 1 FROM posts p WHERE p.id = n.post_id AND p.deleted = 0)
-                     AND (n.answer_id IS NULL OR EXISTS (SELECT 1 FROM answers a WHERE a.id = n.answer_id AND a.deleted = 0))`;
+      const alive = `((n.kind != 'note_edit' AND EXISTS (SELECT 1 FROM posts p WHERE p.id = n.post_id AND p.deleted = 0)
+                       AND (n.answer_id IS NULL OR EXISTS (SELECT 1 FROM answers a WHERE a.id = n.answer_id AND a.deleted = 0)))
+                     OR (n.kind = 'note_edit' AND EXISTS (SELECT 1 FROM notes t WHERE t.id = n.post_id AND t.deleted = 0 AND t.visibility = 'public')))`;
       if (parts[1] === 'count' && method === 'GET') {
         const r = await env.DB.prepare(`SELECT COUNT(*) AS n FROM notifications n WHERE n.user_id = ? AND n.read_at = 0 AND ${alive}`).bind(user.id).first();
         return json({ unread: r.n });
       }
       if (parts.length === 1 && method === 'GET') {
         const { results } = await env.DB.prepare(
-          `SELECT n.id, n.kind, n.post_id, n.created_at, n.read_at, p.title AS post_title, p.cat, p.subject,
-                  substr(a.body, 1, 80) AS snippet, (SELECT COUNT(*) FROM images i WHERE i.owner_type = 'answer' AND i.owner_id = a.id) AS images
-             FROM notifications n JOIN posts p ON p.id = n.post_id LEFT JOIN answers a ON a.id = n.answer_id
+          `SELECT n.id, n.kind, n.post_id, n.created_at, n.read_at,
+                  CASE WHEN n.kind = 'note_edit' THEN t.title ELSE p.title END AS post_title, p.cat,
+                  CASE WHEN n.kind = 'note_edit' THEN t.subject ELSE p.subject END AS subject,
+                  CASE WHEN n.kind = 'note_edit' THEN NULL ELSE substr(a.body, 1, 80) END AS snippet,
+                  (SELECT COUNT(*) FROM images i WHERE n.kind != 'note_edit' AND i.owner_type = 'answer' AND i.owner_id = a.id) AS images
+             FROM notifications n
+             LEFT JOIN posts p ON n.kind != 'note_edit' AND p.id = n.post_id
+             LEFT JOIN notes t ON n.kind = 'note_edit' AND t.id = n.post_id
+             LEFT JOIN answers a ON n.kind != 'note_edit' AND a.id = n.answer_id
             WHERE n.user_id = ? AND ${alive} ORDER BY n.created_at DESC LIMIT 50`
         ).bind(user.id).all();
         return json({ notifications: results.map((n) => ({
@@ -487,6 +495,12 @@ export async function onRequest(context) {
     }
 
     const banGuard = () => (user.banned ? json({ error: '운영자가 글쓰기를 제한했어요. 글은 계속 읽을 수 있어요.', banned: true }, 403) : null);
+
+    // 정리 탭 (functions/_lib/notes.js)
+    if (parts[0] === 'notes' || parts[0] === 'note-images') {
+      const r = await handleNotes({ env, request, url, parts, method, user, H: { json, fail, cleanText, readJson, tagOf, looksLikeImage, IMAGE_TYPES, MAX_IMAGE_BYTES, nameFor, banGuard } });
+      if (r) return r;
+    }
 
     // 글 목록 / 글쓰기
     if (parts[0] === 'posts' && parts.length === 1) {
