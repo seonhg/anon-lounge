@@ -497,9 +497,10 @@ async function listView() {
         h('a', { class: 'item-title', href: `#/post/${p.id}` }, p.title),
         p.excerpt ? h('div', { class: 'item-ex' }, p.excerpt) : null,
         h('div', { class: 'meta' }, h('span', {}, `${p.author} · ${ago(p.createdAt)}`), adminTag(p.tag, p.uid), h('span', {}, `답변 ${p.answers}`),
-          p.hasImage ? h('span', { style: 'display:inline-flex;align-items:center;gap:3px' }, svg(ICON.img, 13), p.imageCount > 1 ? `캡처 ${p.imageCount}` : '캡처') : null,
           helpButton('post', p))),
-      p.thumb ? h('a', { class: 'item-thumb', href: `#/post/${p.id}`, 'aria-label': `${p.title} 첨부 이미지` }, h('img', { src: p.thumb, alt: '', loading: 'lazy' })) : null)));
+      p.thumb ? h('a', { class: 'item-thumb', href: `#/post/${p.id}`, 'aria-label': `${p.title} 첨부 이미지 ${p.imageCount}장` },
+        h('img', { src: p.thumb, alt: '', loading: 'lazy' }),
+        p.imageCount > 1 ? h('span', { class: 'img-count', 'aria-hidden': 'true' }, p.imageCount) : null) : null)));
   } catch (e) {
     list.replaceChildren(h('li', { class: 'card empty' }, e.message));
   }
