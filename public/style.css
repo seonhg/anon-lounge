@@ -27,7 +27,7 @@ button { cursor: pointer; }
 .tier { display: flex; align-items: center; gap: 10px; padding: 12px; border-radius: 12px; background: #F7F8FA; font-size: 13px; line-height: 1.35; }
 .hex { width: 26px; height: 29px; flex: none; clip-path: polygon(50% 0, 100% 25%, 100% 75%, 50% 100%, 0 75%, 0 25%); display: flex; align-items: center; justify-content: center; }
 .hex > i { width: 70%; height: 70%; clip-path: inherit; }
-.page { flex: 1; min-width: 0; padding: clamp(14px, 3vw, 28px) clamp(12px, 3vw, 36px) 40px; display: flex; flex-direction: column; gap: 14px; max-width: 980px; }
+.page { flex: 1; min-width: 0; padding: clamp(14px, 3vw, 28px) clamp(12px, 3vw, 36px) 40px; display: flex; flex-direction: column; gap: 14px; max-width: 1120px; margin: 0 auto; }
 h1 { margin: 0; font-size: 24px; }
 .sub { margin: 4px 0 0; font-size: 14px; color: var(--muted); }
 .card { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); }
