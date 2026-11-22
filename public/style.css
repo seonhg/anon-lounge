@@ -424,7 +424,8 @@ a.btn { display: inline-flex; align-items: center; text-decoration: none; }
   .note-panes[data-mode="preview"] .note-write { display: none; }
   .note-body { min-height: 300px; }
   .note-editor { padding: 14px 12px; }
-  .pc-hint { visibility: hidden; }
+  .pc-hint { display: none; }
+  .composer > .comp-foot > .link-btn { margin-left: auto; }
   .emoji-panel { scroll-margin-bottom: 96px; }
   .emoji-grid { max-height: 150px; }
   .answers.replies { padding-left: 10px; }

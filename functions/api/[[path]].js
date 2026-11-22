@@ -4,6 +4,9 @@ import { b64urlToBytes, bytesToB64url, verifyRegistration, verifyAuthentication 
 import { NOTE_SCHEMA, handleNotes, noteHelpsReceived, migrateNotes } from '../_lib/notes.js';
 
 const CATS = ['질문', '잡담', '건의'];
+// 과목 구분 없이 모든 과목 화면에 같이 보이는 말머리 (subject = 0)
+const GLOBAL_CATS = ['잡담', '건의'];
+const isGlobal = (cat) => GLOBAL_CATS.includes(cat);
 const TIERS = [
   { name: '브론즈', min: 0 },
   { name: '실버', min: 20 },
@@ -154,6 +157,8 @@ async function ensureSchema(env) {
       // 예전 방식(사용자 1명 = 토큰 1개)으로 로그인해 있던 사람을 그대로 이어줌
       await db.prepare("INSERT OR IGNORE INTO sessions (token_hash, user_id, created_at, last_seen_at) SELECT token_hash, id, created_at, created_at FROM users WHERE token_hash IS NOT NULL AND token_hash NOT LIKE 'unused-%'").run();
       await db.prepare("UPDATE users SET token_hash = 'unused-' || id WHERE token_hash IS NOT NULL AND token_hash NOT LIKE 'unused-%'").run();
+      // 잡담은 과목 구분 없이 전체 하나로 (예전에 과목별로 올라온 잡담도 옮김)
+      await db.prepare("UPDATE posts SET subject = 0 WHERE cat = '잡담' AND subject != 0").run();
       // 소유자가 없으면 가장 먼저 들어온 운영자를 소유자로
       const owner = await db.prepare('SELECT 1 AS x FROM users WHERE is_owner = 1').first();
       if (!owner) await db.prepare('UPDATE users SET is_owner = 1 WHERE id = (SELECT id FROM users WHERE is_admin = 1 ORDER BY created_at LIMIT 1)').run();
@@ -527,7 +532,7 @@ export async function onRequest(context) {
           : null;
         const where = ['p.deleted = 0'];
         const args = [user.id];
-        if (subject) { where.push("(p.subject = ? OR p.cat = '건의')"); args.push(subject); }
+        if (subject) { where.push("(p.subject = ? OR p.cat IN ('잡담', '건의'))"); args.push(subject); }
         if (CATS.includes(cat)) { where.push('p.cat = ?'); args.push(cat); }
         const { results } = await env.DB.prepare(
           `SELECT p.id, p.user_id, p.cat, p.subject, p.title, substr(p.body, 1, 120) AS excerpt, p.author_name,
@@ -559,8 +564,8 @@ export async function onRequest(context) {
         if (now - user.last_post_at < POST_COOLDOWN_MS) return fail(429, '조금만 있다가 다시 올려주세요.');
         const cat = CATS.includes(b.cat) ? b.cat : null;
         if (!cat) return fail(400, '말머리를 골라주세요.');
-        const subject = cat === '건의' ? 0 : Number(b.subject);
-        if (cat !== '건의' && !(subject >= 1 && subject <= 16)) return fail(400, '과목을 골라주세요.');
+        const subject = isGlobal(cat) ? 0 : Number(b.subject);
+        if (!isGlobal(cat) && !(subject >= 1 && subject <= 16)) return fail(400, '과목을 골라주세요.');
         const title = cleanText(b.title, 100);
         const body = cleanText(b.body, 5000);
         if (!title) return fail(400, '제목을 써주세요.');
@@ -636,7 +641,7 @@ export async function onRequest(context) {
         const cat = b.cat === undefined ? post.cat : CATS.includes(b.cat) ? b.cat : null;
         if (!cat) return fail(400, '말머리를 골라주세요.');
         let subject = b.subject === undefined ? post.subject : Number(b.subject);
-        if (cat === '건의') subject = 0;
+        if (isGlobal(cat)) subject = 0;
         else if (!(subject >= 1 && subject <= 16)) return fail(400, '과목을 골라주세요.');
         let title = post.title, body = post.body;
         if (mine) {

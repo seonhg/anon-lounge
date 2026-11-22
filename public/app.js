@@ -76,6 +76,9 @@ const ICON = {
 };
 const pad = (n) => (n < 10 ? '0' : '') + n;
 const subjName = (n) => (n === 0 ? '사이트' : `${pad(n)} ${SUBJECTS[n - 1]}`);
+// 잡담·건의는 과목 구분 없이 전체 공용
+const GLOBAL_CATS = ['잡담', '건의'];
+const placeName = (cat, n) => (cat === '잡담' ? '전체' : cat === '건의' ? '사이트' : subjName(n));
 function ago(ts) {
   const s = Math.floor((Date.now() - ts) / 1000);
   if (s < 60) return '방금';
@@ -425,7 +428,7 @@ function composer(onDone) {
   let cat = '질문';
   const subjTag = h('span', { class: 'tag c-질문', style: 'margin-left:auto' }, subjName(sel));
   const radios = h('div', { class: 'radios', role: 'radiogroup', 'aria-label': '말머리' },
-    ...CATS.map((c) => h('label', { class: 'radio' }, h('input', { type: 'radio', name: 'cat', value: c, checked: c === cat ? true : null, onchange: () => { cat = c; subjTag.textContent = c === '건의' ? '사이트 건의' : subjName(sel); } }), c)),
+    ...CATS.map((c) => h('label', { class: 'radio' }, h('input', { type: 'radio', name: 'cat', value: c, checked: c === cat ? true : null, onchange: () => { cat = c; subjTag.textContent = c === '건의' ? '사이트 건의' : c === '잡담' ? '전체 잡담 (모든 과목)' : subjName(sel); } }), c)),
     subjTag);
   const title = h('input', { class: 'plain title-in', type: 'text', maxlength: '100', placeholder: '제목', 'aria-label': '제목' });
   const body = h('textarea', { class: 'plain body-in', rows: '3', maxlength: '5000', placeholder: '내용을 써주세요. 캡처는 Ctrl + V로 바로 붙여넣을 수 있어요.', 'aria-label': '내용' });
@@ -493,7 +496,7 @@ async function listView() {
     list.replaceChildren(...posts.map((p) => h('li', { class: 'card item edge' },
       h('span', { class: `unread-dot${p.unread ? ' on' : ''}`, 'aria-label': p.unread ? '새 글' : null }),
       h('div', { class: 'item-main' },
-        h('div', { class: 'item-tags' }, h('span', { class: `tag c-${p.cat}` }, p.cat), h('span', { class: 'tag' }, subjName(p.subject))),
+        h('div', { class: 'item-tags' }, h('span', { class: `tag c-${p.cat}` }, p.cat), h('span', { class: 'tag' }, placeName(p.cat, p.subject))),
         h('a', { class: 'item-title', href: `#/post/${p.id}` }, p.title),
         p.excerpt ? h('div', { class: 'item-ex' }, p.excerpt) : null,
         h('div', { class: 'meta' }, h('span', {}, `${p.author} · ${ago(p.createdAt)}`), adminTag(p.tag, p.uid), h('span', {}, `답변 ${p.answers}`),
@@ -628,7 +631,7 @@ async function postView(id) {
   app.replaceChildren(shell('q', [
     h('a', { class: 'back', href: '#/' }, svg(ICON.back), '목록'),
     h('article', { class: 'card post edge' },
-      h('div', { class: 'item-tags' }, h('span', { class: `tag c-${post.cat}` }, post.cat), h('span', { class: 'tag' }, subjName(post.subject))),
+      h('div', { class: 'item-tags' }, h('span', { class: `tag c-${post.cat}` }, post.cat), h('span', { class: 'tag' }, placeName(post.cat, post.subject))),
       h('h2', {}, post.title),
       h('div', { class: 'meta' }, h('span', {}, `${post.author} · ${ago(post.createdAt)}${post.editedAt ? ' · 수정됨' : ''}`), adminTag(post.tag, post.uid),
         (post.mine && !state.me.banned) || canModerate ? h('button', { type: 'button', class: 'link-btn', onclick: () => editPost(post, () => postView(id)) }, post.mine ? '고치기' : '옮기기') : null,
@@ -649,7 +652,7 @@ function editPost(post, done) {
   let cat = post.cat;
   const subj = h('select', { 'aria-label': '과목' }, ...SUBJECTS.map((n, i) => h('option', { value: i + 1, selected: post.subject === i + 1 ? true : null }, `${pad(i + 1)} ${n}`)));
   if (post.subject === 0) subj.value = String(state.me.mySubject);
-  const syncSubj = () => { subj.disabled = cat === '건의'; };
+  const syncSubj = () => { subj.disabled = GLOBAL_CATS.includes(cat); };
   const radios = h('div', { class: 'radios', role: 'radiogroup', 'aria-label': '말머리' },
     ...CATS.map((c) => h('label', { class: 'radio' }, h('input', { type: 'radio', name: 'edit-cat', value: c, checked: c === cat ? true : null, onchange: () => { cat = c; syncSubj(); } }), c)), subj);
   syncSubj();
@@ -856,7 +859,7 @@ async function adminUserView(uid) {
     tabs.querySelectorAll('button').forEach((b) => b.setAttribute('aria-selected', b.dataset.t === tab ? 'true' : 'false'));
     const items = tab === 'posts'
       ? d.posts.map((p) => h('li', { class: `card item edge${p.deleted ? ' gone' : ''}` }, h('div', { class: 'item-main' },
-          h('div', { class: 'item-tags' }, h('span', { class: `tag c-${p.cat}` }, p.cat), h('span', { class: 'tag' }, subjName(p.subject)), delTag(p.deleted)),
+          h('div', { class: 'item-tags' }, h('span', { class: `tag c-${p.cat}` }, p.cat), h('span', { class: 'tag' }, placeName(p.cat, p.subject)), delTag(p.deleted)),
           p.deleted ? h('div', { class: 'item-title' }, p.title) : h('a', { class: 'item-title', href: `#/post/${p.id}` }, p.title),
           p.excerpt ? h('div', { class: 'item-ex' }, p.excerpt) : null,
           h('div', { class: 'meta' }, h('span', {}, `${p.realName ? `실명 ${p.realName} · ` : ''}${ago(p.createdAt)}`), h('span', {}, `답변 ${p.answers}`), h('span', {}, `도움 ${p.helps}`), imgTag(p.images)))))
