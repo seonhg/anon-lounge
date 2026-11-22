@@ -37,6 +37,13 @@ CREATE TABLE IF NOT EXISTS passkeys (
 );
 CREATE INDEX IF NOT EXISTS idx_passkeys_user ON passkeys(user_id);
 
+-- 코드를 계속 틀리는 곳(IP 해시) 잠깐 막기
+CREATE TABLE IF NOT EXISTS rate_limits (
+  key      TEXT PRIMARY KEY,
+  count    INTEGER NOT NULL,
+  reset_at INTEGER NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS challenges (
   id         TEXT PRIMARY KEY,
   challenge  TEXT NOT NULL,

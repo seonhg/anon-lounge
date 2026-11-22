@@ -76,6 +76,7 @@ function decodeImages(list) {
     if (bin.length > MAX_IMAGE_BYTES) throw new Error('이미지가 너무 커요. 400KB 이하로 줄여주세요.');
     const bytes = new Uint8Array(bin.length);
     for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    if (!looksLikeImage(bytes, img.mime)) throw new Error('이미지 파일이 아니에요.');
     return { mime: img.mime, bytes };
   });
 }
@@ -83,6 +84,36 @@ async function readJson(request) {
   try { return await request.json(); } catch { return {}; }
 }
 const tagOf = (userId) => '#' + userId.slice(0, 6);
+
+// 실제 이미지 파일인지 앞부분(매직 바이트)으로 확인
+function looksLikeImage(bytes, mime) {
+  const b = bytes;
+  if (mime === 'image/png') return b.length > 8 && b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4E && b[3] === 0x47;
+  if (mime === 'image/jpeg') return b.length > 3 && b[0] === 0xFF && b[1] === 0xD8 && b[2] === 0xFF;
+  if (mime === 'image/webp') return b.length > 12 && String.fromCharCode(...b.slice(0, 4)) === 'RIFF' && String.fromCharCode(...b.slice(8, 12)) === 'WEBP';
+  return false;
+}
+
+// 같은 곳(IP)에서 코드를 계속 틀리면 잠깐 막기. IP는 해시로만 저장
+const FAIL_LIMIT = 30; // 한 교실이 같은 IP를 써도 넉넉하게
+const FAIL_WINDOW_MS = 10 * 60 * 1000;
+async function rateKey(request, kind) {
+  const ip = request.headers.get('cf-connecting-ip') || request.headers.get('x-forwarded-for') || 'local';
+  return `${kind}:${(await sha256('al-rate:' + ip)).slice(0, 32)}`;
+}
+async function isLimited(env, key) {
+  const row = await env.DB.prepare('SELECT count, reset_at FROM rate_limits WHERE key = ?').bind(key).first();
+  return !!row && row.reset_at > Date.now() && row.count >= FAIL_LIMIT;
+}
+async function noteFailure(env, key) {
+  const now = Date.now();
+  await env.DB.prepare(
+    `INSERT INTO rate_limits (key, count, reset_at) VALUES (?1, 1, ?2)
+     ON CONFLICT(key) DO UPDATE SET count = CASE WHEN reset_at > ?3 THEN count + 1 ELSE 1 END,
+                                    reset_at = CASE WHEN reset_at > ?3 THEN reset_at ELSE ?2 END`
+  ).bind(key, now + FAIL_WINDOW_MS, now).run();
+}
+const DAILY_IMAGE_LIMIT = 200; // 한 사람이 하루에 올릴 수 있는 이미지 수 (저장 공간 보호)
 
 // ---------- 스키마 자동 보강 (이미 운영 중인 DB도 그대로 씀) ----------
 let schemaReady = null;
@@ -96,6 +127,7 @@ async function ensureSchema(env) {
         'CREATE TABLE IF NOT EXISTS passkeys (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, public_key TEXT NOT NULL, alg INTEGER NOT NULL, sign_count INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL, last_used_at INTEGER NOT NULL DEFAULT 0)',
         'CREATE INDEX IF NOT EXISTS idx_passkeys_user ON passkeys(user_id)',
         'CREATE TABLE IF NOT EXISTS challenges (id TEXT PRIMARY KEY, challenge TEXT NOT NULL, kind TEXT NOT NULL, user_id TEXT, created_at INTEGER NOT NULL)',
+        'CREATE TABLE IF NOT EXISTS rate_limits (key TEXT PRIMARY KEY, count INTEGER NOT NULL, reset_at INTEGER NOT NULL)',
       ];
       for (const s of stmts) await db.prepare(s).run();
       const { results: cols } = await db.prepare('PRAGMA table_info(users)').all();
@@ -193,11 +225,19 @@ export async function onRequest(context) {
   const method = request.method;
 
   try {
+    // 다른 사이트에서 몰래 보내는 요청 막기 (CSRF): 쓰기 요청은 이 사이트에서 온 것만
+    if (!['GET', 'HEAD', 'OPTIONS'].includes(method)) {
+      const origin = request.headers.get('origin');
+      const site = request.headers.get('sec-fetch-site');
+      if ((origin && origin !== url.origin) || (site && !['same-origin', 'none'].includes(site))) return fail(403, '이 사이트에서만 보낼 수 있어요.');
+    }
     await ensureSchema(env);
 
     // ===== 로그인 없이 쓰는 주소 =====
     // 처음 입장 (초대 코드). ADMIN_CODE는 소유자가 아직 없을 때 한 번만 통함
     if (parts[0] === 'join' && method === 'POST') {
+      const rk = await rateKey(request, 'join');
+      if (await isLimited(env, rk)) return fail(429, '코드를 너무 많이 틀렸어요. 10분 뒤에 다시 해주세요.');
       const { code } = await readJson(request);
       const c = String(code || '').trim();
       let isAdmin = false;
@@ -206,6 +246,7 @@ export async function onRequest(context) {
         if (owner) return fail(403, '운영자 코드는 처음 한 번만 쓸 수 있어요. 운영자는 소유자가 지정해요.');
         isAdmin = true;
       } else if (!(env.INVITE_CODE && safeEqual(c, env.INVITE_CODE))) {
+        await noteFailure(env, rk);
         return fail(403, '초대 코드가 맞지 않아요.');
       }
       const id = randomHex(12);
@@ -219,11 +260,13 @@ export async function onRequest(context) {
 
     // 복구 코드로 다른 기기에서 들어오기
     if (parts[0] === 'recover' && method === 'POST') {
+      const rk = await rateKey(request, 'recover');
+      if (await isLimited(env, rk)) return fail(429, '코드를 너무 많이 틀렸어요. 10분 뒤에 다시 해주세요.');
       const { code } = await readJson(request);
       const norm = normalizeRecovery(code);
       if (norm.length !== 16) return fail(400, '복구 코드는 16글자예요. (예: ABCD-EFGH-JKLM-NPQR)');
       const user = await env.DB.prepare('SELECT * FROM users WHERE recovery_hash = ?').bind(await sha256(norm)).first();
-      if (!user) return fail(403, '복구 코드가 맞지 않아요.');
+      if (!user) { await noteFailure(env, rk); return fail(403, '복구 코드가 맞지 않아요.'); }
       const cookie = await startSession(env, request, user.id);
       return json(await meView(env, user), 200, { 'set-cookie': cookie });
     }
@@ -593,6 +636,13 @@ export async function onRequest(context) {
       const bytes = new Uint8Array(await request.arrayBuffer());
       if (!bytes.length) return fail(400, '빈 이미지예요.');
       if (bytes.length > MAX_IMAGE_BYTES) return fail(400, '이미지가 너무 커요. 400KB 이하로 줄여주세요.');
+      if (!looksLikeImage(bytes, mime)) return fail(400, '이미지 파일이 아니에요.');
+      const today = await env.DB.prepare(
+        `SELECT COUNT(*) AS n FROM images i WHERE i.created_at > ?2 AND (
+           (i.owner_type = 'post' AND i.owner_id IN (SELECT id FROM posts WHERE user_id = ?1)) OR
+           (i.owner_type = 'answer' AND i.owner_id IN (SELECT id FROM answers WHERE user_id = ?1)))`
+      ).bind(user.id, Date.now() - 24 * 3600 * 1000).first();
+      if (today.n >= DAILY_IMAGE_LIMIT) return fail(429, `이미지는 하루 ${DAILY_IMAGE_LIMIT}장까지 올릴 수 있어요.`);
       const cnt = await env.DB.prepare('SELECT COUNT(*) AS n FROM images WHERE owner_type = ? AND owner_id = ?').bind(type, ownerId).first();
       if (cnt.n >= MAX_IMAGES) return fail(400, `이미지는 ${MAX_IMAGES}장까지예요.`);
       const res = await env.DB.prepare('INSERT INTO images (owner_type, owner_id, mime, data, created_at) VALUES (?, ?, ?, ?, ?)')
@@ -611,10 +661,14 @@ export async function onRequest(context) {
 
     // 이미지 보기 (들어온 사람만)
     if (parts[0] === 'images' && parts[1] && method === 'GET') {
-      const img = await env.DB.prepare('SELECT mime, data FROM images WHERE id = ?').bind(Number(parts[1])).first();
+      const img = await env.DB.prepare(
+        `SELECT i.mime, i.data FROM images i WHERE i.id = ? AND (
+           (i.owner_type = 'post' AND EXISTS (SELECT 1 FROM posts p WHERE p.id = i.owner_id AND p.deleted = 0)) OR
+           (i.owner_type = 'answer' AND EXISTS (SELECT 1 FROM answers a JOIN posts p ON p.id = a.post_id WHERE a.id = i.owner_id AND a.deleted = 0 AND p.deleted = 0)))`
+      ).bind(Number(parts[1])).first();
       if (!img) return fail(404, '이미지가 없어요.');
       const bytes = new Uint8Array(img.data);
-      return new Response(bytes, { headers: { 'content-type': img.mime, 'cache-control': 'private, max-age=86400', 'x-content-type-options': 'nosniff' } });
+      return new Response(bytes, { headers: { 'content-type': img.mime, 'cache-control': 'private, max-age=3600', 'x-content-type-options': 'nosniff', 'content-security-policy': "default-src 'none'; sandbox", 'content-disposition': 'inline' } });
     }
 
     return fail(404, '없는 주소예요.');

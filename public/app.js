@@ -530,7 +530,7 @@ function editPost(post, done) {
 function settingsView() {
   const me = state.me;
   const subj = h('select', { id: 'my-subj' }, ...SUBJECTS.map((n, i) => h('option', { value: i + 1, selected: me.mySubject === i + 1 ? true : null }, `${pad(i + 1)} ${n}`)));
-  const name = h('input', { id: 'real-name', type: 'text', maxlength: '20', value: me.realName, placeholder: '예: 김성희' });
+  const name = h('input', { id: 'real-name', type: 'text', maxlength: '20', value: me.realName, placeholder: '예: 홍길동' });
   const sw = h('input', { type: 'checkbox', role: 'switch', 'aria-label': '실명으로 활동하기', checked: me.showReal ? true : null });
   const save = h('button', { class: 'btn', type: 'button' }, '저장');
   save.addEventListener('click', async () => {

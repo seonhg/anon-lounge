@@ -28,6 +28,14 @@ const { onRequest } = await import(pathToFileURL(path.join(root, 'functions/api/
 
 const types = { '.svg': 'image/svg+xml', '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8' };
 const port = Number(process.env.PORT || 8788);
+// public/_headers의 '/*' 헤더를 로컬에서도 똑같이 붙임
+const staticHeaders = {};
+try {
+  for (const line of (await readFile(path.join(root, 'public/_headers'), 'utf8')).split('\n')) {
+    const m = line.match(/^\s+([A-Za-z-]+):\s*(.+)$/);
+    if (m && m[1] !== 'Strict-Transport-Security') staticHeaders[m[1]] = m[2];
+  }
+} catch {}
 http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://localhost:${port}`);
   if (url.pathname.startsWith('/api/')) {
@@ -42,7 +50,7 @@ http.createServer(async (req, res) => {
   const file = url.pathname === '/' ? '/index.html' : url.pathname;
   try {
     const body = await readFile(path.join(root, 'public', path.normalize(file).replace(/^(\.\.[/\\])+/, '')));
-    res.writeHead(200, { 'content-type': types[path.extname(file)] || 'application/octet-stream' });
+    res.writeHead(200, { ...staticHeaders, 'content-type': types[path.extname(file)] || 'application/octet-stream' });
     res.end(body);
   } catch {
     res.writeHead(404); res.end('not found');
