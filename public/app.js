@@ -107,7 +107,22 @@ async function api(path, opts = {}) {
 // ---------- 패스키 (지문·얼굴·PIN으로 로그인) ----------
 const b64uToBuf = (s) => { const b = atob(s.replace(/-/g, '+').replace(/_/g, '/') + '==='.slice((s.length + 3) % 4)); const a = new Uint8Array(b.length); for (let i = 0; i < b.length; i++) a[i] = b.charCodeAt(i); return a.buffer; };
 const bufToB64u = (buf) => { const a = new Uint8Array(buf); let s = ''; for (let i = 0; i < a.length; i++) s += String.fromCharCode(a[i]); return btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, ''); };
-const passkeySupported = () => !!(window.PublicKeyCredential && navigator.credentials && window.isSecureContext);
+// 팀즈 탭처럼 다른 화면 안에 들어가 있는지
+const inFrame = (() => { try { return window.top !== window.self; } catch { return true; } })();
+// 팀즈 안에서는 패스키 창이 막혀서 숨김 (복구 코드 사용)
+const passkeySupported = () => !inFrame && !!(window.PublicKeyCredential && navigator.credentials && window.isSecureContext);
+const openOutside = () => h('a', { class: 'btn ghost sm', href: location.origin + '/', target: '_blank', rel: 'noopener' }, '새 창(브라우저)에서 열기');
+// 입장 직후 로그인이 정말 유지되는지 확인 (팀즈 안에서 쿠키가 막히는 경우 대비)
+async function cookieWorks() {
+  try { const r = await fetch('/api/me', { credentials: 'same-origin', cache: 'no-store' }); return r.ok; } catch { return false; }
+}
+function cookieBlockedView() {
+  app.replaceChildren(h('div', { class: 'center' }, h('div', { class: 'card join' },
+    h('h1', {}, '익명 라운지'),
+    h('div', { class: 'warn' }, h('b', {}, '이 화면에서는 로그인이 저장되지 않아요.'), h('br'),
+      '팀즈나 브라우저 설정이 이 사이트의 쿠키를 막고 있어요. 아래 버튼으로 브라우저에서 열어 주세요. 복구 코드를 저장해 두었다면 거기서 그대로 이어 쓸 수 있어요.'),
+    openOutside())));
+}
 function passkeyError(e) {
   if (e && (e.name === 'NotAllowedError' || e.name === 'AbortError')) return '패스키 창이 닫혔어요. 팀즈 안에서는 안 될 수 있으니 브라우저에서 열어 보세요.';
   if (e && e.name === 'InvalidStateError') return '이 기기에는 이미 패스키가 있어요.';
@@ -315,7 +330,9 @@ function joinView() {
     try {
       const r = await api('/join', { method: 'POST', body: { code: input.value.trim() } });
       const { recoveryCode, ...me } = r;
-      recoveryModal(recoveryCode, () => enter(me));
+      const ok = await cookieWorks();
+      // 쿠키가 막혀도 복구 코드는 꼭 보여줌 → 브라우저에서 이 코드로 이어 쓰기
+      recoveryModal(recoveryCode, () => (ok ? enter(me) : cookieBlockedView()));
     } catch (ex) { err.textContent = ex.message; }
   } },
   h('h2', {}, '처음 왔어요'),
@@ -328,7 +345,7 @@ function joinView() {
   const rc = h('input', { id: 'rc', type: 'text', autocomplete: 'off', autocapitalize: 'characters', spellcheck: 'false', placeholder: 'ABCD-EFGH-JKLM-NPQR' });
   const back = h('form', { class: 'join-sec', onsubmit: async (e) => {
     e.preventDefault(); err2.textContent = '';
-    try { enter(await api('/recover', { method: 'POST', body: { code: rc.value } })); } catch (ex) { err2.textContent = ex.message; }
+    try { const me = await api('/recover', { method: 'POST', body: { code: rc.value } }); (await cookieWorks()) ? enter(me) : cookieBlockedView(); } catch (ex) { err2.textContent = ex.message; }
   } },
   h('h2', {}, '이미 계정이 있어요'),
   passkeySupported() ? h('button', { class: 'btn ghost pk-btn', type: 'button', onclick: async () => {
@@ -343,6 +360,7 @@ function joinView() {
     h('h1', {}, '익명 라운지'),
     h('p', { class: 'sub', style: 'margin:0' }, '여기서 쓰는 글은 모두 익명이에요. 다른 수강생은 누가 썼는지 알 수 없어요.'),
     form, h('hr', { class: 'sep' }), back,
+    inFrame ? h('p', { class: 'sub', style: 'margin:0;font-size:12.5px' }, '팀즈 안에서는 패스키 대신 복구 코드로 들어와요. 잘 안 되면 ', openOutside()) : null,
     h('p', { class: 'sub', style: 'margin:0;font-size:12px' }, '운영자는 문제가 생긴 글을 지우거나 글쓰기를 막을 수 있어요. 개인정보가 담긴 캡처는 올리지 말아주세요.'));
   app.replaceChildren(h('div', { class: 'center' }, card));
   input.focus();

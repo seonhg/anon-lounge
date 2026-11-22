@@ -44,13 +44,15 @@ function newRecoveryCode() {
   return chars.match(/.{4}/g).join('-');
 }
 const normalizeRecovery = (code) => String(code || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
-function getCookie(request, name) {
+// 같은 이름 쿠키가 둘 있을 수 있어서(예전 방식 + 팀즈용) 모두 돌려줌
+function getCookies(request, name) {
   const raw = request.headers.get('cookie') || '';
+  const out = [];
   for (const part of raw.split(';')) {
     const [k, ...v] = part.trim().split('=');
-    if (k === name) return decodeURIComponent(v.join('='));
+    if (k === name && v.length) { try { out.push(decodeURIComponent(v.join('='))); } catch {} }
   }
-  return null;
+  return out;
 }
 function safeEqual(a, b) {
   if (typeof a !== 'string' || typeof b !== 'string' || a.length !== b.length) return false;
@@ -162,10 +164,13 @@ async function ensureSchema(env) {
 
 // ---------- 인증 ----------
 async function currentUser(env, request) {
-  const token = getCookie(request, COOKIE);
-  if (!token) return null;
-  const h = await sha256(token);
-  const user = await env.DB.prepare('SELECT u.*, s.token_hash AS session_hash, s.last_seen_at AS session_seen FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token_hash = ?').bind(h).first();
+  let user = null, h = null;
+  for (const token of getCookies(request, COOKIE).slice(0, 3)) {
+    h = await sha256(token);
+    user = await env.DB.prepare('SELECT u.*, s.token_hash AS session_hash, s.last_seen_at AS session_seen FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token_hash = ?').bind(h).first();
+    if (user) break;
+  }
+  if (!user) return null;
   if (user && Date.now() - user.session_seen > 10 * 60 * 1000) {
     const now = Date.now();
     await env.DB.prepare('UPDATE sessions SET last_seen_at = ? WHERE token_hash = ?').bind(now, h).run();
@@ -173,15 +178,19 @@ async function currentUser(env, request) {
   }
   return user;
 }
+// 팀즈 탭은 이 사이트를 팀즈 화면 안에 끼워서 보여줘요. 그 안에서도 로그인이 유지되도록
+// SameSite=None + Partitioned(팀즈 안 / 일반 브라우저 따로 보관). 다른 사이트의 요청은 Origin 검사로 막아요.
 function cookieFlags(request) {
-  return new URL(request.url).protocol === 'https:' ? '; Secure' : '';
+  const u = new URL(request.url);
+  const secure = u.protocol === 'https:' || u.hostname === 'localhost';
+  return secure ? '; SameSite=None; Secure; Partitioned' : '; SameSite=Lax';
 }
 async function startSession(env, request, userId) {
   const token = randomHex(32);
   const now = Date.now();
   await env.DB.prepare('INSERT INTO sessions (token_hash, user_id, created_at, last_seen_at) VALUES (?, ?, ?, ?)').bind(await sha256(token), userId, now, now).run();
   await env.DB.prepare('UPDATE users SET last_seen_at = ? WHERE id = ?').bind(now, userId).run();
-  return `${COOKIE}=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=31536000${cookieFlags(request)}`;
+  return `${COOKIE}=${token}; Path=/; HttpOnly; Max-Age=31536000${cookieFlags(request)}`;
 }
 async function receivedHelps(env, userId) {
   const row = await env.DB.prepare(
@@ -312,7 +321,11 @@ export async function onRequest(context) {
 
     if (parts[0] === 'logout' && method === 'POST') {
       await env.DB.prepare('DELETE FROM sessions WHERE token_hash = ?').bind(user.session_hash).run();
-      return json({ ok: true }, 200, { 'set-cookie': `${COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0${cookieFlags(request)}` });
+      const res = json({ ok: true });
+      // 새 방식(팀즈용)과 예전 방식 쿠키를 둘 다 지움
+      res.headers.append('set-cookie', `${COOKIE}=; Path=/; HttpOnly; Max-Age=0${cookieFlags(request)}`);
+      res.headers.append('set-cookie', `${COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0${new URL(request.url).protocol === 'https:' ? '; Secure' : ''}`);
+      return res;
     }
 
     // 내 정보
