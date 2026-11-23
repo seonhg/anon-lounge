@@ -70,6 +70,7 @@ const ICON = {
   bell: '<path d="M6 9a6 6 0 1 1 12 0c0 5 2 6.5 2 6.5H4S6 14 6 9z"/><path d="M10 19a2 2 0 0 0 4 0"/>',
   next: '<path d="M9 6l6 6-6 6"/>',
   reply: '<path d="M9 14l-5-5 5-5"/><path d="M4 9h10a6 6 0 0 1 6 6v5"/>',
+  link: '<path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1"/><path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/>',
   smile: '<circle cx="12" cy="12" r="9"/><path d="M8.5 14.5a4.5 4.5 0 0 0 7 0"/><path d="M9 9.5h.01M15 9.5h.01" stroke-width="3" stroke-linecap="round"/>',
   shield: '<path d="M12 3l8 3v6c0 4.5-3.4 8.3-8 9-4.6-.7-8-4.5-8-9V6z"/><path d="M9 12l2 2 4-4"/>',
   key: '<circle cx="8" cy="15" r="4"/><path d="M11 12l9-9M17 6l3 3M15 8l2 2"/>',
@@ -177,6 +178,20 @@ function hexBadge(tierName, size = 26) {
   const outer = h('span', { class: 'hex', 'aria-hidden': 'true', style: `width:${size}px;height:${Math.round(size * 1.12)}px;background:linear-gradient(180deg, ${c[0]}, ${c[1]} 45%, ${c[2]})` });
   outer.append(h('i', { style: `background: radial-gradient(circle at 50% 30%, ${c[3]}, ${c[4]} 80%)` }));
   return outer;
+}
+
+// ---------- 프로필 (실명 사용자만) ----------
+const PROFILE_COLORS = [['violet', '보라'], ['pink', '핑크'], ['blue', '파랑'], ['mint', '민트'], ['orange', '주황'], ['yellow', '노랑'], ['green', '초록'], ['gray', '회색']];
+const AVATAR_EMOJIS = '🙂 😎 🤓 🧐 🥳 😺 🐶 🐱 🐰 🦊 🐻 🐼 🐨 🐯 🦁 🐸 🐧 🐣 🦄 🐳 🐙 🦉 🌱 🌸 🌻 🍀 ⭐ 🌙 🔥 ⚡ 🚀 💻 🎧 🎮 🎨 📚 ☕ 🍩 🍕 🍓'.split(' ');
+function avatarEl(pf, size = 22) {
+  const st = `width:${size}px;height:${size}px;font-size:${Math.round(size * 0.58)}px`;
+  if (pf.image) return h('span', { class: `avatar pc-${pf.color}`, style: st, 'aria-hidden': 'true' }, h('img', { src: pf.image, alt: '' }));
+  return h('span', { class: `avatar pc-${pf.color}`, style: st, 'aria-hidden': 'true' }, pf.emoji || '🙂');
+}
+// 실명으로 쓴 글이면 프로필 사진 + 이름(누르면 프로필), 아니면 그냥 글자
+function authorEl(name, pf, extra = '') {
+  if (!pf) return h('span', {}, name + extra);
+  return h('span', { class: 'author' }, h('a', { class: 'author-link', href: `#/u/${pf.slug}`, title: `${name} 프로필 보기`, onclick: (e) => e.stopPropagation() }, avatarEl(pf), h('span', {}, name)), extra ? h('span', { style: 'white-space:pre' }, extra) : null);
 }
 
 // ---------- 이모티콘 ----------
@@ -499,7 +514,7 @@ async function listView() {
         h('div', { class: 'item-tags' }, h('span', { class: `tag c-${p.cat}` }, p.cat), h('span', { class: 'tag' }, placeName(p.cat, p.subject))),
         h('a', { class: 'item-title', href: `#/post/${p.id}` }, p.title),
         p.excerpt ? h('div', { class: 'item-ex' }, p.excerpt) : null,
-        h('div', { class: 'meta' }, h('span', {}, `${p.author} · ${ago(p.createdAt)}`), adminTag(p.tag, p.uid), h('span', {}, `답변 ${p.answers}`),
+        h('div', { class: 'meta' }, authorEl(p.author, p.profile, ` · ${ago(p.createdAt)}`), adminTag(p.tag, p.uid), h('span', {}, `답변 ${p.answers}`),
           helpButton('post', p))),
       p.thumb ? h('a', { class: 'item-thumb', href: `#/post/${p.id}`, 'aria-label': `${p.title} 첨부 이미지 ${p.imageCount}장` },
         h('img', { src: p.thumb, alt: '', loading: 'lazy' }),
@@ -595,7 +610,7 @@ async function postView(id) {
     return h('li', { class: `answer${isReply ? ' reply' : ''}` },
       h('div', { class: 'row' }, h('span', { class: `who${a.author === '익명(글쓴이)' ? ' op' : ''}` },
         isReply ? h('span', { class: 'reply-mark', 'aria-hidden': 'true' }, svg(ICON.reply, 14)) : null,
-        a.author, h('span', { style: 'font-weight:400;color:var(--muted);margin-left:6px' }, ago(a.createdAt)), adminTag(a.tag, a.uid)),
+        a.profile ? authorEl(a.author, a.profile) : a.author, h('span', { style: 'font-weight:400;color:var(--muted);margin-left:6px' }, ago(a.createdAt)), adminTag(a.tag, a.uid)),
         (a.mine || canModerate) ? del('answer', a.id) : null),
       a.body ? h('p', { class: 'body' }, a.body) : null,
       pics(a.images),
@@ -633,7 +648,7 @@ async function postView(id) {
     h('article', { class: 'card post edge' },
       h('div', { class: 'item-tags' }, h('span', { class: `tag c-${post.cat}` }, post.cat), h('span', { class: 'tag' }, placeName(post.cat, post.subject))),
       h('h2', {}, post.title),
-      h('div', { class: 'meta' }, h('span', {}, `${post.author} · ${ago(post.createdAt)}${post.editedAt ? ' · 수정됨' : ''}`), adminTag(post.tag, post.uid),
+      h('div', { class: 'meta' }, authorEl(post.author, post.profile, ` · ${ago(post.createdAt)}${post.editedAt ? ' · 수정됨' : ''}`), adminTag(post.tag, post.uid),
         (post.mine && !state.me.banned) || canModerate ? h('button', { type: 'button', class: 'link-btn', onclick: () => editPost(post, () => postView(id)) }, post.mine ? '고치기' : '옮기기') : null,
         (post.mine || canModerate) ? del('post', post.id) : null),
       post.body ? h('p', { class: 'body' }, post.body) : null,
@@ -703,7 +718,7 @@ function settingsView() {
   const save = h('button', { class: 'btn', type: 'button' }, '저장');
   save.addEventListener('click', async () => {
     if (sw.checked && !name.value.trim()) { toast('실명을 먼저 적어주세요.'); name.focus(); return; }
-    try { state.me = await api('/me', { method: 'PATCH', body: { mySubject: Number(subj.value), realName: name.value, showReal: sw.checked } }); state.subject = null; toast('저장했어요'); }
+    try { state.me = await api('/me', { method: 'PATCH', body: { mySubject: Number(subj.value), realName: name.value, showReal: sw.checked } }); state.subject = null; toast('저장했어요'); settingsView(); }
     catch (e) { toast(e.message); }
   });
   const t = me.tier;
@@ -714,6 +729,7 @@ function settingsView() {
       h('div', { class: 'row' }, h('span', {}, h('b', {}, '실명으로 활동하기'), h('br'), h('span', { class: 'sub', style: 'font-size:13px' }, '기본은 꺼짐. 켜도 예전에 쓴 익명 글은 그대로 익명이에요.')), h('span', { class: 'switch' }, sw, h('i'))),
       h('label', { class: 'field', for: 'real-name' }, '실명', name),
       h('div', {}, save)),
+    profileSection(),
     h('section', { class: 'card', style: 'padding:20px;display:flex;align-items:center;gap:14px' },
       hexBadge(t.name, 40),
       h('div', {}, h('b', { style: 'font-size:18px' }, t.name), h('div', { class: 'sub' }, `받은 도움 ${t.points}${t.next ? ` · ${t.next.name}까지 ${t.next.need}개` : ''}`))),
@@ -721,6 +737,146 @@ function settingsView() {
     accountSection(),
     h('p', { class: 'sub' }, '다른 수강생에게는 익명이지만, 운영자는 문제가 생긴 글을 지울 수 있어요.'),
   ]));
+}
+
+// 프로필 꾸미기 (실명 켠 사람만)
+function profileSection() {
+  const me = state.me;
+  const sec = h('section', { class: 'card profile-edit', 'aria-labelledby': 'pf-h' });
+  if (!me.showReal || !me.realName) {
+    sec.append(h('h2', { id: 'pf-h' }, '내 프로필 꾸미기'),
+      h('p', { class: 'sub', style: 'margin:0' }, '위에서 "실명으로 활동하기"를 켜면 프로필 사진·소개·관심 태그·링크로 꾸밀 수 있어요. 실명으로 쓴 글에 내 프로필이 보여요.'));
+    return sec;
+  }
+  const pf = { ...me.profile, tags: [...(me.profile.tags || [])], links: (me.profile.links || []).map((l) => ({ ...l })) };
+  const preview = h('div', { class: 'pf-preview-wrap' });
+  const drawPreview = () => preview.replaceChildren(profileCard({ ...pf, name: me.realName, image: pf.avatar === 'image' ? pf.image : null }, { compact: true }));
+  // 사진 / 이모지
+  const avatarRow = h('div', { class: 'pf-avatar-row' });
+  const picker = h('input', { type: 'file', accept: 'image/png,image/jpeg,image/webp', class: 'sr', tabindex: '-1', 'aria-hidden': 'true' });
+  picker.addEventListener('change', async () => {
+    const f = picker.files[0]; picker.value = ''; if (!f) return;
+    try {
+      const blob = await squareAvatar(f);
+      const res = await fetch('/api/me/avatar', { method: 'POST', headers: { 'content-type': blob.type }, body: blob, credentials: 'same-origin' });
+      const j = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(j.error || '사진을 올리지 못했어요.');
+      Object.assign(pf, { image: j.profile.image, hasImage: true, avatar: 'image' }); me.profile = j.profile; drawAvatar(); drawPreview(); toast('프로필 사진을 바꿨어요');
+    } catch (e) { toast(e.message); }
+  });
+  const emojiGrid = h('div', { class: 'pf-emoji-grid', role: 'radiogroup', 'aria-label': '프로필 이모지' });
+  function drawAvatar() {
+    avatarRow.replaceChildren(
+      h('div', { class: 'seg', role: 'group', 'aria-label': '프로필 사진 종류' },
+        h('button', { type: 'button', 'aria-pressed': pf.avatar !== 'image' ? 'true' : 'false', onclick: () => { pf.avatar = 'emoji'; drawAvatar(); drawPreview(); } }, '이모지'),
+        h('button', { type: 'button', 'aria-pressed': pf.avatar === 'image' ? 'true' : 'false', onclick: () => { if (!pf.hasImage) { picker.click(); return; } pf.avatar = 'image'; drawAvatar(); drawPreview(); } }, '내 사진')),
+      pf.avatar === 'image'
+        ? h('div', { style: 'display:flex;gap:8px;flex-wrap:wrap' },
+            h('button', { type: 'button', class: 'btn ghost sm', onclick: () => picker.click() }, '사진 바꾸기'),
+            h('button', { type: 'button', class: 'link-btn', onclick: async () => {
+              try { const j = await api('/me/avatar', { method: 'DELETE' }); Object.assign(pf, { image: null, hasImage: false, avatar: 'emoji' }); me.profile = j.profile; drawAvatar(); drawPreview(); } catch (e) { toast(e.message); }
+            } }, '사진 지우기'))
+        : emojiGrid, picker);
+    emojiGrid.replaceChildren(...AVATAR_EMOJIS.map((e) => h('button', { type: 'button', role: 'radio', 'aria-checked': pf.emoji === e ? 'true' : 'false', 'aria-label': e, onclick: () => { pf.emoji = e; drawAvatar(); drawPreview(); } }, e)));
+  }
+  // 색
+  const colors = h('div', { class: 'pf-colors', role: 'radiogroup', 'aria-label': '프로필 색' });
+  const drawColors = () => colors.replaceChildren(...PROFILE_COLORS.map(([k, label]) => h('button', { type: 'button', role: 'radio', class: `pf-color pc-${k}`, 'aria-checked': pf.color === k ? 'true' : 'false', 'aria-label': label, title: label, onclick: () => { pf.color = k; drawColors(); drawPreview(); } })));
+  // 소개
+  const bio = h('input', { type: 'text', maxlength: '100', value: pf.bio || '', placeholder: '한 줄 소개 (예: 프론트엔드 개발자를 꿈꾸는 중 🚀)', 'aria-label': '한 줄 소개' });
+  bio.addEventListener('input', () => { pf.bio = bio.value; drawPreview(); });
+  // 태그
+  const tagBox = h('div', { class: 'pf-tags' });
+  const tagIn = h('input', { type: 'text', maxlength: '12', placeholder: '관심 분야 입력 후 Enter (최대 5개)', 'aria-label': '관심 분야 태그 추가' });
+  const drawTags = () => tagBox.replaceChildren(...pf.tags.map((t, i) => h('span', { class: 'pf-tag' }, `#${t}`, h('button', { type: 'button', 'aria-label': `${t} 태그 빼기`, onclick: () => { pf.tags.splice(i, 1); drawTags(); drawPreview(); } }, svg(ICON.x, 12)))), pf.tags.length < 5 ? tagIn : null);
+  tagIn.addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter' && e.key !== ',') return;
+    if (e.isComposing) return;
+    e.preventDefault();
+    const v = tagIn.value.trim().replace(/^#/, '').replace(/,/g, '');
+    if (v && !pf.tags.includes(v) && pf.tags.length < 5) { pf.tags.push(v); tagIn.value = ''; drawTags(); drawPreview(); tagBox.querySelector('input')?.focus(); }
+  });
+  // 링크
+  const linkBox = h('div', { class: 'pf-links-edit' });
+  const drawLinks = () => {
+    linkBox.replaceChildren(...pf.links.map((l, i) => {
+      const lab = h('input', { type: 'text', maxlength: '20', value: l.label || '', placeholder: '이름 (예: GitHub)', 'aria-label': `링크 ${i + 1} 이름` });
+      const url = h('input', { type: 'url', maxlength: '200', value: l.url || '', placeholder: 'https://', 'aria-label': `링크 ${i + 1} 주소` });
+      lab.addEventListener('input', () => { l.label = lab.value; drawPreview(); });
+      url.addEventListener('input', () => { l.url = url.value; drawPreview(); });
+      return h('div', { class: 'pf-link-row' }, lab, url, h('button', { type: 'button', class: 'link-btn', onclick: () => { pf.links.splice(i, 1); drawLinks(); drawPreview(); } }, '빼기'));
+    }), pf.links.length < 3 ? h('button', { type: 'button', class: 'btn ghost sm', onclick: () => { pf.links.push({ label: '', url: '' }); drawLinks(); linkBox.querySelector('.pf-link-row:last-of-type input')?.focus(); } }, '+ 링크 추가') : null);
+  };
+  const save = h('button', { class: 'btn', type: 'button' }, '프로필 저장');
+  save.addEventListener('click', async () => {
+    save.disabled = true;
+    try {
+      const pending = tagIn.value.trim().replace(/^#/, '');
+      if (pending && !pf.tags.includes(pending) && pf.tags.length < 5) { pf.tags.push(pending); tagIn.value = ''; drawTags(); }
+      const j = await api('/me/profile', { method: 'PATCH', body: { bio: pf.bio, emoji: pf.emoji, color: pf.color, tags: pf.tags, links: pf.links.filter((l) => (l.url || '').trim()), avatar: pf.avatar } });
+      me.profile = j.profile; toast('프로필을 저장했어요');
+    } catch (e) { toast(e.message); }
+    save.disabled = false;
+  });
+  drawAvatar(); drawColors(); drawTags(); drawLinks(); drawPreview();
+  sec.append(
+    h('div', { class: 'row' }, h('h2', { id: 'pf-h' }, '내 프로필 꾸미기'), me.profile.slug ? h('a', { class: 'link-btn', href: `#/u/${me.profile.slug}` }, '내 프로필 보기') : null),
+    h('p', { class: 'sub', style: 'margin:0;font-size:13px' }, '실명으로 쓴 글과 답변에서 이름 옆에 보여요. 익명으로 쓴 글은 프로필과 연결되지 않아요.'),
+    preview,
+    h('div', { class: 'pf-field' }, h('b', {}, '프로필 사진'), avatarRow),
+    h('div', { class: 'pf-field' }, h('b', {}, '색'), colors),
+    h('label', { class: 'pf-field' }, h('b', {}, '한 줄 소개'), bio),
+    h('div', { class: 'pf-field' }, h('b', {}, '관심 분야'), tagBox),
+    h('div', { class: 'pf-field' }, h('b', {}, '링크 (GitHub, 블로그, 포트폴리오)'), linkBox),
+    h('div', {}, save));
+  return sec;
+}
+// 사진을 가운데 기준 정사각형 256px로 잘라 작게
+async function squareAvatar(file) {
+  if (!file.type.startsWith('image/')) throw new Error('이미지 파일만 올릴 수 있어요.');
+  const bmp = await createImageBitmap(file);
+  const side = Math.min(bmp.width, bmp.height), size = Math.min(256, side);
+  const c = document.createElement('canvas'); c.width = size; c.height = size;
+  c.getContext('2d').drawImage(bmp, (bmp.width - side) / 2, (bmp.height - side) / 2, side, side, 0, 0, size, size);
+  for (const q of [0.88, 0.75, 0.6]) {
+    const b = await new Promise((r) => c.toBlob(r, 'image/webp', q)) || await new Promise((r) => c.toBlob(r, 'image/jpeg', q));
+    if (b && b.size <= 190 * 1024) return b;
+  }
+  throw new Error('사진을 줄이지 못했어요. 다른 사진을 골라주세요.');
+}
+// 프로필 카드 (미리보기·프로필 화면 공용)
+function profileCard(pf, { compact = false, stats = null } = {}) {
+  const safeLinks = (pf.links || []).filter((l) => /^https?:\/\//i.test(l.url || ''));
+  return h('div', { class: `pf-card${compact ? ' compact' : ''}` },
+    h('div', { class: `pf-banner pc-${pf.color}` }),
+    h('div', { class: 'pf-body' },
+      avatarEl(pf, compact ? 64 : 88),
+      h('div', { class: 'pf-name' }, pf.name),
+      pf.bio ? h('div', { class: 'pf-bio' }, pf.bio) : null,
+      pf.tags?.length ? h('div', { class: 'pf-tag-list' }, ...pf.tags.map((t) => h('span', { class: `pf-tag pc-soft-${pf.color}` }, `#${t}`))) : null,
+      safeLinks.length ? h('div', { class: 'pf-link-list' }, ...safeLinks.map((l) => h('a', { href: l.url, target: '_blank', rel: 'noopener noreferrer nofollow' }, svg(ICON.link, 14), l.label || new URL(l.url).hostname))) : null,
+      stats ? h('div', { class: 'pf-stats' }, h('span', {}, h('b', {}, stats.posts), '실명 글'), h('span', {}, h('b', {}, stats.answers), '실명 답변'), h('span', {}, h('b', {}, stats.helps), '받은 도움')) : null));
+}
+async function profileView(slug) {
+  app.replaceChildren(shell('', [h('div', { class: 'card empty' }, '불러오는 중…')]));
+  try {
+    const d = await api(`/profiles/${encodeURIComponent(slug)}`);
+    app.replaceChildren(shell('', [
+      h('button', { type: 'button', class: 'back', onclick: () => history.length > 1 ? history.back() : (location.hash = '#/') }, svg(ICON.back), '뒤로'),
+      h('section', { class: 'card pf-page edge' }, profileCard(d.profile, { stats: d.stats }),
+        d.profile.me ? h('div', { style: 'padding:0 20px 16px' }, h('a', { class: 'btn ghost sm', href: '#/settings' }, '프로필 꾸미기')) : null),
+      h('h2', { style: 'margin:6px 0 0;font-size:16px' }, '실명으로 쓴 글'),
+      h('p', { class: 'sub', style: 'margin:0;font-size:12.5px' }, '익명으로 쓴 글은 여기에 나오지 않아요.'),
+      d.posts.length
+        ? h('ul', { class: 'list' }, ...d.posts.map((p) => h('li', { class: 'card item edge' }, h('div', { class: 'item-main' },
+            h('div', { class: 'item-tags' }, h('span', { class: `tag c-${p.cat}` }, p.cat), h('span', { class: 'tag' }, placeName(p.cat, p.subject))),
+            h('a', { class: 'item-title', href: `#/post/${p.id}` }, p.title),
+            h('div', { class: 'meta' }, h('span', {}, ago(p.createdAt)), h('span', {}, `답변 ${p.answers}`), p.helps ? h('span', {}, `도움 ${p.helps}`) : null)))))
+        : h('div', { class: 'card empty' }, '아직 실명으로 쓴 글이 없어요.'),
+    ]));
+  } catch (e) {
+    app.replaceChildren(shell('', [h('a', { class: 'back', href: '#/' }, svg(ICON.back), '질문'), h('div', { class: 'card empty' }, e.message)]));
+  }
 }
 
 function themeSection() {
@@ -1322,6 +1478,8 @@ async function render() {
   if (hash === '#/settings') return settingsView();
   if (hash === '#/admin') return adminView();
   if (hash === '#/alerts') return alertsView();
+  const pm = hash.match(/^#\/u\/([0-9a-f]+)$/);
+  if (pm) return profileView(pm[1]);
   if (hash === '#/notes') return notesView();
   let nm;
   if ((nm = hash.match(/^#\/notes\/new(?:\/(\d+))?$/))) return noteEditor(null, nm[1]);

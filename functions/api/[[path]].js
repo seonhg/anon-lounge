@@ -2,6 +2,7 @@
 // 필요한 설정: D1 바인딩 이름 DB, 환경 변수 INVITE_CODE(반 공용 코드), ADMIN_CODE(소유자 최초 등록용)
 import { b64urlToBytes, bytesToB64url, verifyRegistration, verifyAuthentication } from '../_lib/webauthn.js';
 import { NOTE_SCHEMA, handleNotes, noteHelpsReceived, migrateNotes } from '../_lib/notes.js';
+import { migrateProfile, myProfile, profilesFor, handleProfile } from '../_lib/profile.js';
 
 const CATS = ['질문', '잡담', '건의'];
 // 과목 구분 없이 모든 과목 화면에 같이 보이는 말머리 (subject = 0)
@@ -139,6 +140,7 @@ async function ensureSchema(env) {
       ];
       for (const s of [...stmts, ...NOTE_SCHEMA]) await db.prepare(s).run();
       await migrateNotes(db);
+      await migrateProfile(db);
       const { results: cols } = await db.prepare('PRAGMA table_info(users)').all();
       const have = new Set(cols.map((c) => c.name));
       const add = [
@@ -216,6 +218,7 @@ async function meView(env, user) {
     realName: user.real_name || '',
     showReal: !!user.show_real,
     tier: tierOf(await receivedHelps(env, user.id)),
+    profile: await myProfile(env.DB, user),
   };
 }
 const nameFor = (user) => (user.show_real && user.real_name ? user.real_name : null);
@@ -523,6 +526,12 @@ export async function onRequest(context) {
 
     const banGuard = () => (user.banned ? json({ error: '운영자가 글쓰기를 제한했어요. 글은 계속 읽을 수 있어요.', banned: true }, 403) : null);
 
+    // 프로필 꾸미기 (functions/_lib/profile.js)
+    if (['avatars', 'profiles'].includes(parts[0]) || (parts[0] === 'me' && ['profile', 'avatar'].includes(parts[1]))) {
+      const r = await handleProfile({ env, request, parts, method, user, H: { json, fail, cleanText, readJson, looksLikeImage, IMAGE_TYPES, banGuard } });
+      if (r) return r;
+    }
+
     // 정리 탭 (functions/_lib/notes.js)
     if (parts[0] === 'notes' || parts[0] === 'note-images') {
       const r = await handleNotes({ env, request, url, parts, method, user, H: { json, fail, cleanText, readJson, tagOf, looksLikeImage, IMAGE_TYPES, MAX_IMAGE_BYTES, nameFor, banGuard } });
@@ -551,7 +560,9 @@ export async function onRequest(context) {
              FROM posts p WHERE ${where.join(' AND ')}
             ORDER BY p.created_at DESC LIMIT 100`
         ).bind(...args).all();
+        const profiles = await profilesFor(env.DB, results.filter((p) => p.author_name).map((p) => p.user_id));
         const posts = results.map((p) => ({
+          profile: p.author_name ? profiles.get(p.user_id) || null : null,
           id: p.id, cat: p.cat, subject: p.subject, title: p.title, excerpt: p.excerpt,
           author: p.author_name || '익명', answers: p.answer_count, helps: p.help_count, createdAt: p.created_at,
           mine: !!p.mine, helped: !!p.helped, hasImage: !!p.thumb_id, imageCount: p.image_count, thumb: p.thumb_id ? `/api/images/${p.thumb_id}` : null,
@@ -622,8 +633,11 @@ export async function onRequest(context) {
         const imagesOf = (type, id) => imgs.filter((i) => i.owner_type === type && i.owner_id === id).map((i) => `/api/images/${i.id}`);
         const adminTag = (uid) => (user.is_admin ? tagOf(uid) : undefined);
         const adminUid = (uid) => (user.is_admin ? uid : undefined);
+        // 실명으로 쓴 글·답변에만 프로필(사진·색)을 붙임
+        const profiles = await profilesFor(env.DB, [post.author_name ? post.user_id : null, ...answers.filter((a) => !a.deleted && a.author_name).map((a) => a.user_id)]);
         return json({
           post: {
+            profile: post.author_name ? profiles.get(post.user_id) || null : null,
             id: post.id, cat: post.cat, subject: post.subject, title: post.title, body: post.body,
             author: post.author_name || '익명', createdAt: post.created_at, helps: post.help_count,
             helped: !!helpedPost, mine: post.user_id === user.id, images: imagesOf('post', post.id), tag: adminTag(post.user_id), uid: adminUid(post.user_id),
@@ -634,6 +648,7 @@ export async function onRequest(context) {
             ? { id: a.id, parentId: null, deleted: true, body: '', author: '', createdAt: a.created_at, helps: 0, helped: false, mine: false, images: [] }
             : {
               id: a.id, parentId: a.parent_id || null, body: a.body, author: label(a.user_id, a.author_name), createdAt: a.created_at,
+              profile: a.author_name ? profiles.get(a.user_id) || null : null,
               helps: a.help_count, helped: !!a.helped, mine: a.user_id === user.id, images: imagesOf('answer', a.id), tag: adminTag(a.user_id), uid: adminUid(a.user_id),
             })),
           canModerate: !!user.is_admin,
