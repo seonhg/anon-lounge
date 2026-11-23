@@ -263,8 +263,16 @@ export async function onRequest(context) {
       const c = String(code || '').trim();
       let isAdmin = false;
       if (env.ADMIN_CODE && safeEqual(c, env.ADMIN_CODE)) {
-        const owner = await env.DB.prepare('SELECT 1 AS x FROM users WHERE is_owner = 1').first();
-        if (owner) return fail(403, '운영자 코드는 처음 한 번만 쓸 수 있어요. 운영자는 소유자가 지정해요.');
+        const owner = await env.DB.prepare('SELECT * FROM users WHERE is_owner = 1 ORDER BY created_at LIMIT 1').first();
+        if (owner) {
+          // 소유자 계정 되찾기: 새 계정을 만들지 않고 기존 소유자로 들어감.
+          // 복구 코드를 새로 만들어 한 번 보여줌 (예전 복구 코드는 더 이상 안 통함)
+          const recovery = newRecoveryCode();
+          await env.DB.prepare('UPDATE users SET recovery_hash = ?, banned = 0, is_admin = 1 WHERE id = ?').bind(await sha256(normalizeRecovery(recovery)), owner.id).run();
+          const cookie = await startSession(env, request, owner.id);
+          const u = await env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(owner.id).first();
+          return json({ ...(await meView(env, u)), recoveryCode: recovery, ownerRestored: true }, 200, { 'set-cookie': cookie });
+        }
         isAdmin = true;
       } else if (!(env.INVITE_CODE && safeEqual(c, env.INVITE_CODE))) {
         await noteFailure(env, rk);

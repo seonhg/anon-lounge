@@ -335,7 +335,7 @@ function joinView() {
       const { recoveryCode, ...me } = r;
       const ok = await cookieWorks();
       // 쿠키가 막혀도 복구 코드는 꼭 보여줌 → 브라우저에서 이 코드로 이어 쓰기
-      recoveryModal(recoveryCode, () => (ok ? enter(me) : cookieBlockedView()));
+      recoveryModal(recoveryCode, () => { if (!ok) return cookieBlockedView(); enter(me); if (r.ownerRestored) toast('소유자 계정으로 다시 들어왔어요'); });
     } catch (ex) { err.textContent = ex.message; }
   } },
   h('h2', {}, '처음 왔어요'),
