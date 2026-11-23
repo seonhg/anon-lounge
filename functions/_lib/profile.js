@@ -23,6 +23,7 @@ function parseProfile(raw) {
     tags: Array.isArray(p.tags) ? p.tags.filter((t) => typeof t === 'string').slice(0, 5) : [],
     links: Array.isArray(p.links) ? p.links.filter((l) => l && typeof l.url === 'string').slice(0, 3) : [],
     avatar: p.avatar === 'image' ? 'image' : 'emoji',
+    showPosts: p.showPosts !== false, // 프로필에 실명 글 기록 보여주기 (기본 켬)
   };
 }
 const isPublic = (u) => !!(u && u.show_real && u.real_name);
@@ -94,6 +95,11 @@ export async function handleProfile(ctx) {
     const u = await db.prepare('SELECT * FROM users WHERE profile_slug = ?').bind(parts[1]).first();
     if (!isPublic(u)) return fail(404, '프로필을 볼 수 없어요. 실명 활동을 끈 사용자예요.');
     const p = parseProfile(u.profile);
+    const isMe = u.id === user.id;
+    // 글 기록을 비공개로 했으면 남에게는 목록·숫자를 안 보냄 (본인은 봄)
+    if (!p.showPosts && !isMe) {
+      return json({ profile: { ...card(u, p), bio: p.bio, tags: p.tags, links: p.links, me: false }, postsHidden: true, stats: null, posts: [] });
+    }
     // 실명으로 쓴 것만
     const { results: posts } = await db.prepare(
       `SELECT id, cat, subject, title, answer_count, help_count, created_at FROM posts
@@ -102,7 +108,8 @@ export async function handleProfile(ctx) {
     const a = await db.prepare('SELECT COUNT(*) AS c, COALESCE(SUM(help_count), 0) AS h FROM answers WHERE user_id = ? AND author_name IS NOT NULL AND deleted = 0').bind(u.id).first();
     const postHelps = posts.reduce((s, x) => s + x.help_count, 0);
     return json({
-      profile: { ...card(u, p), bio: p.bio, tags: p.tags, links: p.links, me: u.id === user.id },
+      profile: { ...card(u, p), bio: p.bio, tags: p.tags, links: p.links, me: isMe },
+      postsHidden: false, privateToOthers: !p.showPosts,
       stats: { posts: posts.length, answers: a.c, helps: postHelps + a.h },
       posts: posts.map((x) => ({ id: x.id, cat: x.cat, subject: x.subject, title: x.title, answers: x.answer_count, helps: x.help_count, createdAt: x.created_at })),
     });
@@ -125,6 +132,7 @@ export async function handleProfile(ctx) {
         ? b.links.map((l) => ({ label: cleanText(String(l?.label || ''), 20), url: cleanUrl(l?.url) })).filter((l) => l.url).slice(0, 3)
         : cur.links,
       avatar: b.avatar === 'image' && user.avatar_mime ? 'image' : b.avatar === 'emoji' ? 'emoji' : cur.avatar,
+      showPosts: b.showPosts !== undefined ? !!b.showPosts : cur.showPosts,
     };
     if (Array.isArray(b.links) && b.links.some((l) => String(l?.url || '').trim() && !cleanUrl(l.url))) return fail(400, '링크는 https:// 로 시작하는 주소만 넣을 수 있어요.');
     await db.prepare('UPDATE users SET profile = ? WHERE id = ?').bind(JSON.stringify(next), user.id).run();

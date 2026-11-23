@@ -807,13 +807,15 @@ function profileSection() {
       return h('div', { class: 'pf-link-row' }, lab, url, h('button', { type: 'button', class: 'link-btn', onclick: () => { pf.links.splice(i, 1); drawLinks(); drawPreview(); } }, '빼기'));
     }), pf.links.length < 3 ? h('button', { type: 'button', class: 'btn ghost sm', onclick: () => { pf.links.push({ label: '', url: '' }); drawLinks(); linkBox.querySelector('.pf-link-row:last-of-type input')?.focus(); } }, '+ 링크 추가') : null);
   };
+  const showPostsSw = h('input', { type: 'checkbox', role: 'switch', 'aria-label': '프로필에 쓴 글 기록 공개', checked: pf.showPosts !== false ? true : null });
+  showPostsSw.addEventListener('change', () => { pf.showPosts = showPostsSw.checked; });
   const save = h('button', { class: 'btn', type: 'button' }, '프로필 저장');
   save.addEventListener('click', async () => {
     save.disabled = true;
     try {
       const pending = tagIn.value.trim().replace(/^#/, '');
       if (pending && !pf.tags.includes(pending) && pf.tags.length < 5) { pf.tags.push(pending); tagIn.value = ''; drawTags(); }
-      const j = await api('/me/profile', { method: 'PATCH', body: { bio: pf.bio, emoji: pf.emoji, color: pf.color, tags: pf.tags, links: pf.links.filter((l) => (l.url || '').trim()), avatar: pf.avatar } });
+      const j = await api('/me/profile', { method: 'PATCH', body: { bio: pf.bio, emoji: pf.emoji, color: pf.color, tags: pf.tags, links: pf.links.filter((l) => (l.url || '').trim()), avatar: pf.avatar, showPosts: pf.showPosts !== false } });
       me.profile = j.profile; toast('프로필을 저장했어요');
     } catch (e) { toast(e.message); }
     save.disabled = false;
@@ -828,6 +830,9 @@ function profileSection() {
     h('label', { class: 'pf-field' }, h('b', {}, '한 줄 소개'), bio),
     h('div', { class: 'pf-field' }, h('b', {}, '관심 분야'), tagBox),
     h('div', { class: 'pf-field' }, h('b', {}, '링크 (GitHub, 블로그, 포트폴리오)'), linkBox),
+    h('div', { class: 'row' }, h('span', {}, h('b', {}, '쓴 글 기록 공개'), h('br'),
+      h('span', { class: 'sub', style: 'font-size:13px' }, '끄면 다른 사람이 내 프로필에서 실명으로 쓴 글 목록과 활동 숫자를 볼 수 없어요. 글 자체는 게시판에 그대로 있어요.')),
+      h('span', { class: 'switch' }, showPostsSw, h('i'))),
     h('div', {}, save));
   return sec;
 }
@@ -863,16 +868,17 @@ async function profileView(slug) {
     const d = await api(`/profiles/${encodeURIComponent(slug)}`);
     app.replaceChildren(shell('', [
       h('button', { type: 'button', class: 'back', onclick: () => history.length > 1 ? history.back() : (location.hash = '#/') }, svg(ICON.back), '뒤로'),
-      h('section', { class: 'card pf-page edge' }, profileCard(d.profile, { stats: d.stats }),
+      h('section', { class: 'card pf-page edge' }, profileCard(d.profile, { stats: d.postsHidden ? null : d.stats }),
         d.profile.me ? h('div', { style: 'padding:0 20px 16px' }, h('a', { class: 'btn ghost sm', href: '#/settings' }, '프로필 꾸미기')) : null),
+      ...(d.postsHidden ? [h('div', { class: 'card empty' }, '🔒 이 사용자는 쓴 글 기록을 비공개로 해뒀어요.')] : [
       h('h2', { style: 'margin:6px 0 0;font-size:16px' }, '실명으로 쓴 글'),
-      h('p', { class: 'sub', style: 'margin:0;font-size:12.5px' }, '익명으로 쓴 글은 여기에 나오지 않아요.'),
+      h('p', { class: 'sub', style: 'margin:0;font-size:12.5px' }, d.privateToOthers ? '🔒 비공개로 해둬서 다른 사람에게는 이 목록이 안 보여요. 나만 보여요.' : '익명으로 쓴 글은 여기에 나오지 않아요.'),
       d.posts.length
         ? h('ul', { class: 'list' }, ...d.posts.map((p) => h('li', { class: 'card item edge' }, h('div', { class: 'item-main' },
             h('div', { class: 'item-tags' }, h('span', { class: `tag c-${p.cat}` }, p.cat), h('span', { class: 'tag' }, placeName(p.cat, p.subject))),
             h('a', { class: 'item-title', href: `#/post/${p.id}` }, p.title),
             h('div', { class: 'meta' }, h('span', {}, ago(p.createdAt)), h('span', {}, `답변 ${p.answers}`), p.helps ? h('span', {}, `도움 ${p.helps}`) : null)))))
-        : h('div', { class: 'card empty' }, '아직 실명으로 쓴 글이 없어요.'),
+        : h('div', { class: 'card empty' }, '아직 실명으로 쓴 글이 없어요.')]),
     ]));
   } catch (e) {
     app.replaceChildren(shell('', [h('a', { class: 'back', href: '#/' }, svg(ICON.back), '질문'), h('div', { class: 'card empty' }, e.message)]));
