@@ -280,7 +280,7 @@ a.btn { display: inline-flex; align-items: center; text-decoration: none; }
 .emoji-wrap { position: relative; display: inline-flex; }
 .emoji-btn { width: 40px; height: 40px; border: 1px solid var(--line); border-radius: 12px; background: var(--card); color: var(--muted); display: inline-flex; align-items: center; justify-content: center; }
 .emoji-btn:hover, .emoji-btn[aria-expanded="true"] { color: var(--accent-ink); border-color: var(--accent-line); background: var(--accent-soft); }
-.emoji-panel { width: 100%; padding: 10px; border-radius: 14px; border: 1px solid var(--accent-line); background: var(--soft-bg); display: flex; flex-direction: column; gap: 6px; }
+.emoji-panel { width: 100%; max-width: 460px; padding: 10px; border-radius: 14px; border: 1px solid var(--accent-line); background: var(--soft-bg); display: flex; flex-direction: column; gap: 6px; }
 .emoji-top { display: flex; align-items: center; gap: 6px; border-bottom: 1px solid var(--line2); padding-bottom: 6px; }
 .emoji-top .emoji-tabs { flex: 1; border: 0; padding: 0; }
 .emoji-close { flex: none; width: 34px; height: 34px; border: 0; border-radius: 8px; background: transparent; color: var(--muted); display: inline-flex; align-items: center; justify-content: center; }
@@ -352,6 +352,49 @@ a.btn { display: inline-flex; align-items: center; text-decoration: none; }
 .pf-tags input { flex: 1 1 200px; }
 .pf-links-edit { display: flex; flex-direction: column; gap: 8px; align-items: flex-start; }
 .pf-link-row { display: grid; grid-template-columns: 140px 1fr auto; gap: 8px; width: 100%; align-items: center; }
+
+/* GIF·스티커 고르기 */
+.pk-tabs { flex: 1; display: flex; gap: 2px; }
+.pk-tabs button { border: 0; background: transparent; padding: 6px 12px; font-size: 14px; color: var(--muted); border-bottom: 3px solid transparent; border-radius: 0; }
+.pk-tabs button[aria-selected="true"] { color: var(--ink); font-weight: 800; border-bottom-color: var(--accent); }
+.pk-search { width: 100%; min-height: 38px; border: 1px solid var(--line); border-bottom: 2px solid var(--accent-line); border-radius: 10px; padding: 0 12px; background: var(--field-bg); color: var(--ink); font-size: 14px; }
+.pk-search:focus { outline: none; border-bottom-color: var(--accent); }
+.pk-body { max-height: 300px; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; }
+.pk-sec { display: flex; flex-direction: column; gap: 6px; }
+.pk-sec-h { display: flex; align-items: center; justify-content: space-between; font-size: 13.5px; color: var(--ink); }
+.pk-more { border: 0; background: none; color: var(--ink2); font-size: 13px; padding: 2px 4px; }
+.pk-more:hover { color: var(--accent-ink); }
+.pk-row.emoji-grid { max-height: none; overflow: hidden; grid-template-columns: repeat(8, minmax(0, 52px)); justify-content: space-between; }
+.pk-row.emoji-grid button { aspect-ratio: auto; height: 44px; }
+.pk-note { grid-column: 1 / -1; font-size: 12.5px; color: var(--muted); padding: 6px 2px; }
+.pk-gif-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+.pk-gif-grid { columns: 3 110px; column-gap: 6px; }
+.pk-gif-grid .md { width: 100%; margin-bottom: 6px; break-inside: avoid; }
+.pk-sticker-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
+.pk-sticker-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(76px, 1fr)); gap: 6px; }
+.md { display: block; padding: 0; border: 0; border-radius: 10px; overflow: hidden; background: var(--card); cursor: pointer; }
+.md img { display: block; width: 100%; }
+.pk-gif-row .md { height: 88px; } .pk-gif-row .md img { height: 100%; object-fit: cover; }
+.md.sticker, .md.gsticker { aspect-ratio: 1; background: transparent; border: 1px solid var(--line2); }
+.md.sticker img, .md.gsticker img { height: 100%; object-fit: contain; padding: 4px; }
+.md:hover, .md:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.pk-load { grid-column: 1 / -1; width: 100%; margin-top: 4px; }
+.pk-attr { font-size: 11px; color: var(--dim); text-align: right; }
+.pk-attr b { color: var(--muted); letter-spacing: .04em; }
+/* 글쓰기 칸에 붙인 GIF·스티커 */
+.media-tray { display: flex; gap: 8px; flex-wrap: wrap; }
+.media-chip { position: relative; margin: 0; width: 96px; height: 72px; border-radius: 10px; overflow: hidden; border: 1px solid var(--line); background: var(--soft-bg); }
+.media-chip img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.media-chip.sticker img, .media-chip.gsticker img { object-fit: contain; padding: 4px; }
+.media-chip button { position: absolute; top: 2px; right: 2px; width: 22px; height: 22px; border: 0; border-radius: 50%; background: rgba(20, 16, 44, .75); color: #fff; display: flex; align-items: center; justify-content: center; }
+.gif-badge { position: absolute; left: 4px; bottom: 4px; font-size: 10px; font-weight: 800; color: #fff; background: rgba(0, 0, 0, .65); padding: 1px 5px; border-radius: 4px; }
+/* 글·답변에 보이는 GIF·스티커 */
+.media-list { display: flex; flex-wrap: wrap; gap: 8px; align-items: flex-end; }
+.media-item.gif, .media-item.gsticker { max-width: min(100%, 280px); max-height: 240px; border-radius: 12px; }
+.media-item.gif { border: 1px solid var(--line); }
+.media-item.sticker { width: 120px; height: 120px; }
+.media-item.gsticker { width: 140px; height: auto; }
+.media-thumb.sticker img, .media-thumb.gsticker img { object-fit: contain; padding: 6px; filter: none; }
 
 /* 대댓글 */
 .thread { list-style: none; }

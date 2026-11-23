@@ -215,34 +215,142 @@ function insertAtCursor(el, text) {
   el.dispatchEvent(new Event('input', { bubbles: true }));
   el.focus();
 }
-// 😊 버튼: fields 중 마지막으로 누른 칸(없으면 마지막 칸)에 넣음.
-// 이모티콘 창은 글쓰기 칸 '아래'에 펼쳐져서 쓰던 글을 가리지 않음
-function emojiButton(...fields) {
+// 한글로 이모지 찾기 (자주 쓰는 것만)
+const EMOJI_KW = [
+  ['웃음 웃기 기쁨 행복 ㅋㅋ', '😀 😃 😄 😁 😆 😂 🤣 😊 🙂 😉'], ['사랑 하트 좋아 감동', '❤️ 🧡 💛 💚 💙 💜 🥰 😍 😘 💕 💖'],
+  ['슬픔 눈물 우울 ㅠㅠ', '😢 😭 🥺 🥹 😞 😔 😿'], ['화남 짜증 분노', '😡 😠 🤬 😤 💢'], ['박수 축하 파티 생일', '👏 🎉 🎊 🥳 🙌 🎂 🎁'],
+  ['최고 좋아요 굿 엄지', '👍 💯 🏆 🥇 ✨ ⭐ 🌟'], ['생각 고민 궁금 질문', '🤔 🧐 😕 ❓ 💭'], ['놀람 깜짝 헐 대박', '😮 😲 😱 🤯 😳 😵‍💫'],
+  ['잠 졸림 피곤', '😴 😪 🥱 💤 🛌'], ['컴퓨터 코딩 개발 버그 오류', '💻 ⌨️ 🖥️ 🐛 🛠️ ⚙️ 🚀 ❌ ⚠️'], ['공부 책 시험 학교', '📚 📖 ✏️ 📝 🎓 🧠 💡'],
+  ['커피 음료 차', '☕ 🍵 🧃 🥤'], ['음식 밥 점심 배고파', '🍕 🍔 🍜 🍣 🍙 🍗 🍰'], ['불 핫 열정', '🔥 💥 ⚡'], ['확인 체크 완료 오케이', '✅ ☑️ 👌 🆗 🙆'],
+  ['안녕 인사 손 부탁 감사', '👋 🙏 🤝 ✋ 🙇'], ['동물 고양이 강아지 귀여', '🐶 🐱 🐰 🦊 🐻 🐼 🐹'], ['날씨 해 비 눈', '☀️ ⛅ 🌧️ ❄️ 🌈 ☃️'],
+].map(([k, v]) => [k, v.split(' ')]);
+function searchEmojis(q) {
+  const out = new Set();
+  for (const [k, list] of EMOJI_KW) if (k.split(' ').some((w) => w.includes(q) || q.includes(w))) list.forEach((e) => out.add(e));
+  return [...out];
+}
+let gifCache = {}; // 같은 화면에서 다시 열 때 GIPHY 호출 아끼기
+async function fetchGifs(kind, q = '', offset = 0) {
+  const key = `${kind}|${q}|${offset}`;
+  if (!gifCache[key]) gifCache[key] = api(`/gifs?${new URLSearchParams({ kind, q, offset })}`).catch((e) => { delete gifCache[key]; throw e; });
+  return gifCache[key];
+}
+const LOCAL_STICKERS = [['thanks', '감사합니다'], ['fighting', '화이팅'], ['wow', '대박'], ['question', '질문있어요'], ['gotit', '이해 완료'], ['huh', '헐'], ['lol', 'ㅋㅋㅋ'], ['goodjob', '수고했어요'], ['help', '도와주세요'], ['best', '최고'], ['error', '오류났어요'], ['coffee', '커피 한잔'], ['sleepy', '졸려요'], ['congrats', '축하해요'], ['ok', '알겠어요'], ['deploy', '배포 성공']]
+  .map(([id, label]) => ({ type: 'sticker', id, label, src: `/stickers/${id}.svg`, w: 200, h: 200 }));
+
+// 글에 붙일 GIF·스티커 모음 (최대 4개)
+function mediaTray() {
+  const items = [];
+  const el = h('div', { class: 'media-tray', hidden: true });
+  const draw = () => {
+    el.hidden = !items.length;
+    el.replaceChildren(...items.map((m, i) => h('figure', { class: `media-chip ${m.type}` },
+      h('img', { src: m.preview || m.src, alt: m.label || '' }), m.type === 'gif' ? h('span', { class: 'gif-badge' }, 'GIF') : null,
+      h('button', { type: 'button', 'aria-label': `${m.label || '항목'} 빼기`, onclick: () => { items.splice(i, 1); draw(); } }, svg(ICON.x, 12)))));
+  };
+  return {
+    el, count: () => items.length, clear: () => { items.length = 0; draw(); },
+    payload: () => items.map((m) => (m.type === 'sticker' ? { type: 'sticker', id: m.id } : { type: m.type, src: m.src, w: m.w, h: m.h })),
+    add: (m) => { if (items.length >= 4) { toast('GIF·스티커는 4개까지 붙일 수 있어요.'); return false; } items.push(m); draw(); return true; },
+  };
+}
+// 글·답변에 붙은 GIF·스티커 보여주기
+function mediaView(list) {
+  if (!list || !list.length) return null;
+  return h('div', { class: 'media-list' }, ...list.map((m) => h('img', { class: `media-item ${m.type}`, src: m.src, alt: m.label || '', loading: 'lazy', width: m.type === 'sticker' ? 120 : null })));
+}
+
+// 😊 버튼 → 모두 / 이모지 / GIF / 스티커 고르기 창 (팀즈 비슷하게)
+// fields: 이모지를 넣을 글 칸들, media: mediaTray() (없으면 이모지만)
+function emojiButton(...args) {
+  const opts = args.length && args[args.length - 1] && args[args.length - 1].media ? args.pop() : {};
+  const fields = args;
+  const media = opts.media || null;
   let last = fields[fields.length - 1];
   fields.forEach((f) => f && f.addEventListener('focus', () => { last = f; }));
   const wrap = h('span', { class: 'emoji-wrap' });
-  const btn = h('button', { type: 'button', class: 'emoji-btn', 'aria-label': '이모티콘 넣기', 'aria-expanded': 'false', title: '이모티콘' }, svg(ICON.smile, 20));
-  let pop = null, box = null, cat = recentEmojis().length ? -1 : 0;
+  const btn = h('button', { type: 'button', class: 'emoji-btn', 'aria-label': media ? '이모지·GIF·스티커 넣기' : '이모지 넣기', 'aria-expanded': 'false', title: media ? '이모지·GIF·스티커' : '이모지' }, svg(ICON.smile, 20));
+  let pop = null, box = null, tab = media ? 'all' : 'emoji', cat = recentEmojis().length ? -1 : 0, query = '';
   const close = () => { pop?.remove(); pop = null; btn.setAttribute('aria-expanded', 'false'); document.removeEventListener('mousedown', outside, true); document.removeEventListener('keydown', esc, true); };
-  const outside = (e) => { if (!box.contains(e.target)) close(); }; // 글쓰기 칸 안(글자 칸 포함)을 누르는 건 괜찮음
+  const outside = (e) => { if (!box.contains(e.target)) close(); };
   const esc = (e) => { if (e.key === 'Escape' && pop) { e.stopPropagation(); close(); last.focus(); } };
+  const putEmoji = (e) => { insertAtCursor(last, e); rememberEmoji(e); };
+  const putMedia = (m) => { if (media.add(m)) { close(); toast(m.type === 'gif' ? 'GIF를 붙였어요' : '스티커를 붙였어요'); } };
+  const emojiBtn = (e) => h('button', { type: 'button', class: 'em', 'aria-label': e, onclick: () => putEmoji(e) }, e);
+  const mediaBtn = (m) => h('button', { type: 'button', class: `md ${m.type}`, 'aria-label': m.label || (m.type === 'gif' ? 'GIF' : '스티커'), title: m.label || '', onclick: () => putMedia(m) }, h('img', { src: m.preview || m.src, alt: '', loading: 'lazy' }));
+  const section = (title, toTab, content) => h('div', { class: 'pk-sec' },
+    h('div', { class: 'pk-sec-h' }, h('b', {}, title), toTab ? h('button', { type: 'button', class: 'pk-more', onclick: () => { tab = toTab; draw(); } }, '모두 보기 ›') : null), content);
+  const giphyNote = () => h('div', { class: 'pk-note' }, 'GIF는 운영자가 GIPHY 키를 설정하면 쓸 수 있어요.');
+  const attribution = () => h('div', { class: 'pk-attr' }, 'Powered by ', h('b', {}, 'GIPHY'));
+  // GIF·GIPHY 스티커 영역 (불러오는 동안 자리 표시)
+  function giphyGrid(kind, { limit = 0, cls = 'pk-gif-grid' } = {}) {
+    const grid = h('div', { class: cls }, h('div', { class: 'pk-note' }, '불러오는 중…'));
+    let offset = 0;
+    const load = async (append) => {
+      try {
+        const r = await fetchGifs(kind, query, offset);
+        if (!r.enabled) { grid.replaceChildren(giphyNote()); return; }
+        const items = limit ? r.items.slice(0, limit) : r.items;
+        const btns = items.map(mediaBtn);
+        if (append) grid.querySelector('.pk-load')?.remove(); else grid.replaceChildren();
+        if (!btns.length && !append) grid.append(h('div', { class: 'pk-note' }, query ? `"${query}" 결과가 없어요.` : '결과가 없어요.'));
+        grid.append(...btns);
+        if (!limit && r.next) grid.append(h('button', { type: 'button', class: 'btn ghost sm pk-load', onclick: () => { offset = r.next; load(true); } }, '더 보기'));
+      } catch (e) { grid.replaceChildren(h('div', { class: 'pk-note' }, e.message)); }
+    };
+    load(false);
+    return grid;
+  }
+  function body() {
+    const q = query.trim();
+    if (tab === 'emoji') {
+      if (q) { const r = searchEmojis(q); return h('div', { class: 'emoji-grid' }, ...(r.length ? r.map(emojiBtn) : [h('div', { class: 'pk-note' }, '찾는 이모지가 없어요.')])); }
+      const tabs = [...(recentEmojis().length ? [[-1, '🕘', '최근']] : []), ...EMOJI_SETS.map(([name, list], i) => [i, list[0], name])];
+      const list = cat === -1 ? recentEmojis() : EMOJI_SETS[cat][1];
+      return h('div', {},
+        h('div', { class: 'emoji-tabs', role: 'tablist', 'aria-label': '이모지 종류' }, ...tabs.map(([i, icon, name]) =>
+          h('button', { type: 'button', role: 'tab', 'aria-selected': i === cat ? 'true' : 'false', title: name, 'aria-label': name, onclick: () => { cat = i; draw(); } }, icon))),
+        h('div', { class: 'emoji-name' }, cat === -1 ? '최근 쓴 이모지' : EMOJI_SETS[cat][0]),
+        h('div', { class: 'emoji-grid' }, ...list.map(emojiBtn)));
+    }
+    if (tab === 'gif') return h('div', {}, giphyGrid('gifs'), attribution());
+    if (tab === 'sticker') {
+      const locals = LOCAL_STICKERS.filter((s) => !q || s.label.includes(q));
+      return h('div', {},
+        section('라운지 스티커', null, h('div', { class: 'pk-sticker-grid' }, ...(locals.length ? locals.map(mediaBtn) : [h('div', { class: 'pk-note' }, '찾는 스티커가 없어요.')]))),
+        section('GIPHY 스티커', null, giphyGrid('stickers', { cls: 'pk-sticker-grid' })), attribution());
+    }
+    // 모두
+    const emojis = q ? searchEmojis(q).slice(0, 8) : [...new Set([...recentEmojis(), '😂', '👍', '🙏', '🔥', '😭', '🎉', '🤔', '❤️'])].slice(0, 8);
+    const locals = LOCAL_STICKERS.filter((s) => !q || s.label.includes(q)).slice(0, 4);
+    return h('div', {},
+      section('이모지', 'emoji', h('div', { class: 'pk-row emoji-grid' }, ...(emojis.length ? emojis.map(emojiBtn) : [h('div', { class: 'pk-note' }, '찾는 이모지가 없어요.')]))),
+      section('GIF', 'gif', giphyGrid('gifs', { limit: 3, cls: 'pk-row pk-gif-row' })),
+      section('스티커', 'sticker', h('div', { class: 'pk-row pk-sticker-row' }, ...(locals.length ? locals.map(mediaBtn) : [h('div', { class: 'pk-note' }, '찾는 스티커가 없어요.')]))),
+      attribution());
+  }
+  let searchTimer;
+  const search = h('input', { type: 'search', class: 'pk-search', placeholder: media ? '재미있는 항목 찾기' : '이모지 찾기 (예: 웃음, 박수)', 'aria-label': '찾기' });
+  search.addEventListener('input', () => { clearTimeout(searchTimer); searchTimer = setTimeout(() => { query = search.value; drawBody(); }, tab === 'emoji' ? 50 : 450); });
+  search.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); clearTimeout(searchTimer); query = search.value; drawBody(); } });
+  const content = h('div', { class: 'pk-body' });
+  const drawBody = () => content.replaceChildren(body());
   function draw() {
-    const tabs = [...(recentEmojis().length ? [[-1, '🕘', '최근']] : []), ...EMOJI_SETS.map(([name, list], i) => [i, list[0], name])];
-    const list = cat === -1 ? recentEmojis() : EMOJI_SETS[cat][1];
+    const tabs = media ? [['all', '모두'], ['emoji', '이모지'], ['gif', 'GIF'], ['sticker', '스티커']] : [];
     pop.replaceChildren(
       h('div', { class: 'emoji-top' },
-        h('div', { class: 'emoji-tabs', role: 'tablist', 'aria-label': '이모티콘 종류' }, ...tabs.map(([i, icon, name]) =>
-          h('button', { type: 'button', role: 'tab', 'aria-selected': i === cat ? 'true' : 'false', title: name, 'aria-label': name, onclick: () => { cat = i; draw(); } }, icon))),
-        h('button', { type: 'button', class: 'emoji-close', 'aria-label': '이모티콘 창 닫기', onclick: () => { close(); last.focus(); } }, svg(ICON.x, 16))),
-      h('div', { class: 'emoji-name' }, cat === -1 ? '최근 쓴 이모티콘' : EMOJI_SETS[cat][0]),
-      h('div', { class: 'emoji-grid' }, ...list.map((e) => h('button', { type: 'button', 'aria-label': e, onclick: () => { insertAtCursor(last, e); rememberEmoji(e); } }, e))),
-      h('div', { class: 'emoji-foot' }, '고를 때마다 위 글에 바로 들어가요 · 여러 개 골라도 돼요 · Windows는 ', h('b', {}, 'Win + .'), '으로도 열 수 있어요'));
+        tabs.length ? h('div', { class: 'pk-tabs', role: 'tablist', 'aria-label': '종류' }, ...tabs.map(([k, label]) =>
+          h('button', { type: 'button', role: 'tab', 'aria-selected': tab === k ? 'true' : 'false', onclick: () => { tab = k; draw(); } }, label))) : h('b', { style: 'flex:1' }, '이모지'),
+        h('button', { type: 'button', class: 'emoji-close', 'aria-label': '닫기', onclick: () => { close(); last.focus(); } }, svg(ICON.x, 16))),
+      search, content,
+      ...(tab === 'emoji' ? [h('div', { class: 'emoji-foot' }, '여러 개 골라도 돼요 · Windows는 ', h('b', {}, 'Win + .'), '으로도 열 수 있어요')] : []));
+    drawBody();
   }
-  btn.addEventListener('mousedown', (e) => e.preventDefault()); // 글 칸의 커서 위치 유지
+  btn.addEventListener('mousedown', (e) => e.preventDefault());
   btn.addEventListener('click', () => {
     if (pop) { close(); return; }
-    box = wrap.closest('.reply-box, .composer') || wrap.parentElement;
-    pop = h('div', { class: 'emoji-panel', role: 'group', 'aria-label': '이모티콘 고르기' });
+    box = wrap.closest('.reply-box, .composer, .note-editor') || wrap.parentElement;
+    pop = h('div', { class: 'emoji-panel', role: 'group', 'aria-label': media ? '이모지·GIF·스티커 고르기' : '이모지 고르기' });
     pop.addEventListener('mousedown', (e) => { if (e.target.closest('button')) e.preventDefault(); });
     draw(); box.append(pop); btn.setAttribute('aria-expanded', 'true');
     pop.scrollIntoView({ block: 'nearest' });
@@ -448,24 +556,25 @@ function composer(onDone) {
   const title = h('input', { class: 'plain title-in', type: 'text', maxlength: '100', placeholder: '제목', 'aria-label': '제목' });
   const body = h('textarea', { class: 'plain body-in', rows: '3', maxlength: '5000', placeholder: '내용을 써주세요. 캡처는 Ctrl + V로 바로 붙여넣을 수 있어요.', 'aria-label': '내용' });
   const tray = imageTray(root);
+  const mtray = mediaTray();
   const send = h('button', { class: 'btn', type: 'button' }, '올리기');
   send.addEventListener('click', async () => {
     if (!title.value.trim()) { title.focus(); toast('제목을 써주세요.'); return; }
     send.disabled = true;
     try {
-      const { id } = await api('/posts', { method: 'POST', body: { cat, subject: sel, title: title.value, body: body.value } });
+      const { id } = await api('/posts', { method: 'POST', body: { cat, subject: sel, title: title.value, body: body.value, media: mtray.payload() } });
       const imgs = tray.files();
-      title.value = ''; body.value = ''; tray.clear(); state.composeOpen = false;
+      title.value = ''; body.value = ''; tray.clear(); mtray.clear(); state.composeOpen = false;
       try { await uploadImages('post', id, imgs); } catch (e) { toast(`${e.message} 글은 올라갔으니 '고치기'로 다시 넣어 주세요.`); onDone(); send.disabled = false; return; }
       toast(state.me.showReal ? '실명으로 올라갔어요' : '익명으로 올라갔어요');
       onDone();
     } catch (e) { toast(e.message); }
     send.disabled = false;
   });
-  root.append(radios, title, body, tray.el,
-    h('div', { class: 'comp-foot' }, emojiButton(title, body), h('span', { class: 'hint pc-hint' }, h('b', {}, 'Win + Shift + S'), ' → ', h('b', {}, 'Ctrl + V'), ' · 이름·API 키가 보이지 않는지 확인해 주세요'),
+  root.append(radios, title, body, mtray.el, tray.el,
+    h('div', { class: 'comp-foot' }, emojiButton(title, body, { media: mtray }), h('span', { class: 'hint pc-hint' }, h('b', {}, 'Win + Shift + S'), ' → ', h('b', {}, 'Ctrl + V'), ' · 이름·API 키가 보이지 않는지 확인해 주세요'),
       h('button', { type: 'button', class: 'link-btn', onclick: () => {
-        if ((title.value.trim() || body.value.trim() || tray.count()) && !confirm('쓰던 내용을 지우고 접을까요?')) return;
+        if ((title.value.trim() || body.value.trim() || tray.count() || mtray.count()) && !confirm('쓰던 내용을 지우고 접을까요?')) return;
         state.composeOpen = false; root.replaceWith(composer(onDone));
       } }, '접기'), send));
   return root;
@@ -518,7 +627,10 @@ async function listView() {
           helpButton('post', p))),
       p.thumb ? h('a', { class: 'item-thumb', href: `#/post/${p.id}`, 'aria-label': `${p.title} 첨부 이미지 ${p.imageCount}장` },
         h('img', { src: p.thumb, alt: '', loading: 'lazy' }),
-        p.imageCount > 1 ? h('span', { class: 'img-count', 'aria-hidden': 'true' }, p.imageCount) : null) : null)));
+        p.imageCount > 1 ? h('span', { class: 'img-count', 'aria-hidden': 'true' }, p.imageCount) : null)
+      // 사진이 없고 GIF·스티커만 있으면 그걸 미리보기로
+      : p.media && p.media.length ? h('a', { class: `item-thumb media-thumb ${p.media[0].type}`, href: `#/post/${p.id}`, 'aria-label': `${p.title} ${p.media[0].label}` },
+        h('img', { src: p.media[0].src, alt: '', loading: 'lazy' }), p.media[0].type === 'gif' ? h('span', { class: 'img-count' }, 'GIF') : null) : null)));
   } catch (e) {
     list.replaceChildren(h('li', { class: 'card empty' }, e.message));
   }
@@ -590,17 +702,18 @@ async function postView(id) {
     const root = h('div', { class: 'reply-box composer' });
     const ta = h('textarea', { class: 'plain body-in', rows: '2', maxlength: '5000', placeholder: `${replyTo}에게 답글 (캡처는 Ctrl + V)`, 'aria-label': '대댓글 내용' });
     const tray = imageTray(root);
+    const mtray = mediaTray();
     const go = h('button', { class: 'btn sm', type: 'button' }, '답글 달기');
     go.addEventListener('click', async () => {
-      if (!ta.value.trim() && !tray.count()) { ta.focus(); return; }
+      if (!ta.value.trim() && !tray.count() && !mtray.count()) { ta.focus(); return; }
       go.disabled = true;
       try {
-        const { id: rid } = await api(`/posts/${id}/answers`, { method: 'POST', body: { body: ta.value, parentId: top.id, withImages: tray.count() } });
+        const { id: rid } = await api(`/posts/${id}/answers`, { method: 'POST', body: { body: ta.value, parentId: top.id, withImages: tray.count(), media: mtray.payload() } });
         try { await uploadImages('answer', rid, tray.files()); toast('답글을 달았어요'); } catch (e) { toast(e.message); }
         postView(id);
       } catch (e) { toast(e.message); go.disabled = false; }
     });
-    root.append(ta, tray.el, h('div', { class: 'comp-foot' }, emojiButton(ta), h('span', { class: 'hint' }, state.me.showReal ? '실명으로 올라가요' : '익명으로 올라가요'),
+    root.append(ta, mtray.el, tray.el, h('div', { class: 'comp-foot' }, emojiButton(ta, { media: mtray }), h('span', { class: 'hint' }, state.me.showReal ? '실명으로 올라가요' : '익명으로 올라가요'),
       h('button', { type: 'button', class: 'link-btn', onclick: () => root.remove() }, '취소'), go));
     slot.append(root);
     ta.focus();
@@ -613,6 +726,7 @@ async function postView(id) {
         a.profile ? authorEl(a.author, a.profile) : a.author, h('span', { style: 'font-weight:400;color:var(--muted);margin-left:6px' }, ago(a.createdAt)), adminTag(a.tag, a.uid)),
         (a.mine || canModerate) ? del('answer', a.id) : null),
       a.body ? h('p', { class: 'body' }, a.body) : null,
+      mediaView(a.media),
       pics(a.images),
       h('div', { class: 'meta' },
         canWrite && !top.deleted ? h('button', { type: 'button', class: 'reply-btn', onclick: () => replyBox(top, slot, a.author) }, svg(ICON.reply, 14), '답글') : null,
@@ -631,17 +745,18 @@ async function postView(id) {
   const ansRoot = h('section', { class: 'card composer edge', 'aria-label': '답변 쓰기' });
   const ansBody = h('textarea', { class: 'plain body-in', rows: '3', maxlength: '5000', placeholder: '답변을 써주세요. 캡처는 Ctrl + V로 붙여넣어요.', 'aria-label': '답변 내용' });
   const tray = imageTray(ansRoot);
+  const mtray = mediaTray();
   const send = h('button', { class: 'btn', type: 'button' }, '답변 올리기');
   send.addEventListener('click', async () => {
-    if (!ansBody.value.trim() && !tray.count()) { ansBody.focus(); return; }
+    if (!ansBody.value.trim() && !tray.count() && !mtray.count()) { ansBody.focus(); return; }
     send.disabled = true;
     try {
-      const { id: aid } = await api(`/posts/${id}/answers`, { method: 'POST', body: { body: ansBody.value, withImages: tray.count() } });
+      const { id: aid } = await api(`/posts/${id}/answers`, { method: 'POST', body: { body: ansBody.value, withImages: tray.count(), media: mtray.payload() } });
       try { await uploadImages('answer', aid, tray.files()); toast('답변을 올렸어요'); } catch (e) { toast(e.message); }
       postView(id);
     } catch (e) { toast(e.message); send.disabled = false; }
   });
-  ansRoot.append(ansBody, tray.el, h('div', { class: 'comp-foot' }, emojiButton(ansBody), h('span', { class: 'hint' }, state.me.showReal ? '실명으로 올라가요' : '익명으로 올라가요'), send));
+  ansRoot.append(ansBody, mtray.el, tray.el, h('div', { class: 'comp-foot' }, emojiButton(ansBody, { media: mtray }), h('span', { class: 'hint' }, state.me.showReal ? '실명으로 올라가요' : '익명으로 올라가요'), send));
 
   app.replaceChildren(shell('q', [
     h('a', { class: 'back', href: '#/' }, svg(ICON.back), '목록'),
@@ -652,6 +767,7 @@ async function postView(id) {
         (post.mine && !state.me.banned) || canModerate ? h('button', { type: 'button', class: 'link-btn', onclick: () => editPost(post, () => postView(id)) }, post.mine ? '고치기' : '옮기기') : null,
         (post.mine || canModerate) ? del('post', post.id) : null),
       post.body ? h('p', { class: 'body' }, post.body) : null,
+      mediaView(post.media),
       pics(post.images),
       h('div', { class: 'meta' }, helpButton('post', post)),
       h('h3', { style: 'margin:8px 0 0;font-size:15px' }, `답변 ${answers.filter((a) => !a.deleted).length}`),

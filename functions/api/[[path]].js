@@ -3,6 +3,7 @@
 import { b64urlToBytes, bytesToB64url, verifyRegistration, verifyAuthentication } from '../_lib/webauthn.js';
 import { NOTE_SCHEMA, handleNotes, noteHelpsReceived, migrateNotes } from '../_lib/notes.js';
 import { migrateProfile, myProfile, profilesFor, handleProfile } from '../_lib/profile.js';
+import { migrateMedia, cleanMedia, viewMedia, handleGifs } from '../_lib/media.js';
 
 const CATS = ['질문', '잡담', '건의'];
 // 과목 구분 없이 모든 과목 화면에 같이 보이는 말머리 (subject = 0)
@@ -141,6 +142,7 @@ async function ensureSchema(env) {
       for (const s of [...stmts, ...NOTE_SCHEMA]) await db.prepare(s).run();
       await migrateNotes(db);
       await migrateProfile(db);
+      await migrateMedia(db);
       const { results: cols } = await db.prepare('PRAGMA table_info(users)').all();
       const have = new Set(cols.map((c) => c.name));
       const add = [
@@ -526,6 +528,9 @@ export async function onRequest(context) {
 
     const banGuard = () => (user.banned ? json({ error: '운영자가 글쓰기를 제한했어요. 글은 계속 읽을 수 있어요.', banned: true }, 403) : null);
 
+    // GIF·스티커 찾기 (functions/_lib/media.js)
+    if (parts[0] === 'gifs' && method === 'GET') return handleGifs({ env, url, json, fail, ctxWaitUntil: context.waitUntil?.bind(context) });
+
     // 프로필 꾸미기 (functions/_lib/profile.js)
     if (['avatars', 'profiles'].includes(parts[0]) || (parts[0] === 'me' && ['profile', 'avatar'].includes(parts[1]))) {
       const r = await handleProfile({ env, request, parts, method, user, H: { json, fail, cleanText, readJson, looksLikeImage, IMAGE_TYPES, banGuard } });
@@ -552,7 +557,7 @@ export async function onRequest(context) {
         if (subject) { where.push("(p.subject = ? OR p.cat IN ('잡담', '건의'))"); args.push(subject); }
         if (CATS.includes(cat)) { where.push('p.cat = ?'); args.push(cat); }
         const { results } = await env.DB.prepare(
-          `SELECT p.id, p.user_id, p.cat, p.subject, p.title, substr(p.body, 1, 120) AS excerpt, p.author_name,
+          `SELECT p.id, p.user_id, p.cat, p.subject, p.title, substr(p.body, 1, 120) AS excerpt, p.author_name, p.media,
                   p.answer_count, p.help_count, p.created_at, (p.user_id = ?1) AS mine,
                   EXISTS (SELECT 1 FROM helps h WHERE h.user_id = ?1 AND h.target_type = 'post' AND h.target_id = p.id) AS helped,
                   (SELECT i.id FROM images i WHERE i.owner_type = 'post' AND i.owner_id = p.id ORDER BY i.id LIMIT 1) AS thumb_id,
@@ -566,6 +571,7 @@ export async function onRequest(context) {
           id: p.id, cat: p.cat, subject: p.subject, title: p.title, excerpt: p.excerpt,
           author: p.author_name || '익명', answers: p.answer_count, helps: p.help_count, createdAt: p.created_at,
           mine: !!p.mine, helped: !!p.helped, hasImage: !!p.thumb_id, imageCount: p.image_count, thumb: p.thumb_id ? `/api/images/${p.thumb_id}` : null,
+          media: viewMedia(p.media),
           unread: seen !== null && !p.mine && p.created_at > seen,
           tag: user.is_admin ? tagOf(p.user_id) : undefined, uid: user.is_admin ? p.user_id : undefined,
         }));
@@ -590,9 +596,11 @@ export async function onRequest(context) {
         if (!title) return fail(400, '제목을 써주세요.');
         let images;
         try { images = decodeImages(b.images); } catch (e) { return fail(400, e.message); }
+        let media;
+        try { media = cleanMedia(b.media); } catch (e) { return fail(400, e.message); }
         const res = await env.DB.prepare(
-          'INSERT INTO posts (user_id, cat, subject, title, body, author_name, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
-        ).bind(user.id, cat, subject, title, body, nameFor(user), now).run();
+          'INSERT INTO posts (user_id, cat, subject, title, body, author_name, created_at, media) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+        ).bind(user.id, cat, subject, title, body, nameFor(user), now, media).run();
         const postId = res.meta.last_row_id;
         for (const img of images) {
           await env.DB.prepare('INSERT INTO images (owner_type, owner_id, mime, data, created_at) VALUES (?, ?, ?, ?, ?)')
@@ -641,14 +649,14 @@ export async function onRequest(context) {
             id: post.id, cat: post.cat, subject: post.subject, title: post.title, body: post.body,
             author: post.author_name || '익명', createdAt: post.created_at, helps: post.help_count,
             helped: !!helpedPost, mine: post.user_id === user.id, images: imagesOf('post', post.id), tag: adminTag(post.user_id), uid: adminUid(post.user_id),
-            editedAt: post.edited_at || 0,
+            editedAt: post.edited_at || 0, media: viewMedia(post.media),
           },
           answers: answers.map((a) => (a.deleted
             // 지운 답변 아래에 대댓글이 남아 있으면 자리만 남김
             ? { id: a.id, parentId: null, deleted: true, body: '', author: '', createdAt: a.created_at, helps: 0, helped: false, mine: false, images: [] }
             : {
               id: a.id, parentId: a.parent_id || null, body: a.body, author: label(a.user_id, a.author_name), createdAt: a.created_at,
-              profile: a.author_name ? profiles.get(a.user_id) || null : null,
+              profile: a.author_name ? profiles.get(a.user_id) || null : null, media: viewMedia(a.media),
               helps: a.help_count, helped: !!a.helped, mine: a.user_id === user.id, images: imagesOf('answer', a.id), tag: adminTag(a.user_id), uid: adminUid(a.user_id),
             })),
           canModerate: !!user.is_admin,
@@ -690,7 +698,9 @@ export async function onRequest(context) {
         const now = Date.now();
         if (now - user.last_post_at < POST_COOLDOWN_MS / 3) return fail(429, '조금만 있다가 다시 올려주세요.');
         const body = cleanText(b.body, 5000);
-        if (!body && !(b.images || []).length && !b.withImages) return fail(400, '답변 내용을 써주세요.');
+        let media;
+        try { media = cleanMedia(b.media); } catch (e) { return fail(400, e.message); }
+        if (!body && !(b.images || []).length && !b.withImages && !media) return fail(400, '답변 내용을 써주세요.');
         let images;
         try { images = decodeImages(b.images); } catch (e) { return fail(400, e.message); }
         // 대댓글: 한 단계까지만. 대댓글에 다시 달면 같은 줄기(맨 위 답변) 아래로
@@ -700,8 +710,8 @@ export async function onRequest(context) {
           if (parent && parent.parent_id) parent = await env.DB.prepare('SELECT id, user_id, parent_id, deleted FROM answers WHERE id = ?').bind(parent.parent_id).first();
           if (!parent || parent.deleted) return fail(404, '답글을 달 답변을 찾을 수 없어요.');
         }
-        const res = await env.DB.prepare('INSERT INTO answers (post_id, user_id, body, author_name, created_at, parent_id) VALUES (?, ?, ?, ?, ?, ?)')
-          .bind(postId, user.id, body, nameFor(user), now, parent ? parent.id : null).run();
+        const res = await env.DB.prepare('INSERT INTO answers (post_id, user_id, body, author_name, created_at, parent_id, media) VALUES (?, ?, ?, ?, ?, ?, ?)')
+          .bind(postId, user.id, body, nameFor(user), now, parent ? parent.id : null, media).run();
         const answerId = res.meta.last_row_id;
         for (const img of images) {
           await env.DB.prepare('INSERT INTO images (owner_type, owner_id, mime, data, created_at) VALUES (?, ?, ?, ?, ?)')

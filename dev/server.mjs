@@ -24,6 +24,24 @@ const D1 = {
   },
 };
 const env = { DB: D1, INVITE_CODE: process.env.INVITE_CODE || 'test-code', ADMIN_CODE: process.env.ADMIN_CODE || 'admin-code' };
+// GIPHY 흉내 (테스트용): GIPHY_FAKE=1 이면 api.giphy.com 대신 가짜 결과
+if (process.env.GIPHY_FAKE) {
+  env.GIPHY_API_KEY = 'fake';
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (input, init) => {
+    const u = new URL(typeof input === 'string' ? input : input.url);
+    if (u.hostname !== 'api.giphy.com') return realFetch(input, init);
+    const sticker = u.pathname.includes('/stickers/');
+    const q = u.searchParams.get('q') || 'trending';
+    const off = Number(u.searchParams.get('offset')) || 0;
+    const data = Array.from({ length: 24 }, (_, i) => {
+      const id = `${sticker ? 'S' : 'G'}${q.length}x${off + i}`;
+      const src = `https://media2.giphy.com/media/v1.Y2lk/${id}/200w.webp?cid=abc&rid=200w.webp&ct=${sticker ? 's' : 'g'}`;
+      return { title: `${q} ${off + i}`, images: { fixed_width: { webp: src, url: src.replace('.webp', '.gif'), width: '200', height: String(120 + (i % 4) * 30) }, fixed_width_small: { webp: src, width: '100', height: '60' } } };
+    });
+    return new Response(JSON.stringify({ data, pagination: { total_count: 72, offset: off } }), { headers: { 'content-type': 'application/json' } });
+  };
+}
 const { onRequest } = await import(pathToFileURL(path.join(root, 'functions/api/[[path]].js')).href);
 
 const types = { '.svg': 'image/svg+xml', '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8' };
