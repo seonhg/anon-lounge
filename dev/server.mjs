@@ -68,7 +68,8 @@ http.createServer(async (req, res) => {
     res.end(Buffer.from(await r.arrayBuffer()));
     return;
   }
-  const file = url.pathname === '/' ? '/index.html' : url.pathname;
+  // Cloudflare Pages처럼 /demo → demo.html
+  const file = url.pathname === '/' ? '/index.html' : (!path.extname(url.pathname) ? url.pathname.replace(/\/$/, '') + '.html' : url.pathname);
   try {
     const body = await readFile(path.join(root, 'public', path.normalize(file).replace(/^(\.\.[/\\])+/, '')));
     res.writeHead(200, { ...staticHeaders, 'content-type': types[path.extname(file)] || 'application/octet-stream' });

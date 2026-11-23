@@ -136,6 +136,7 @@ async function ensureSchema(env) {
         'CREATE INDEX IF NOT EXISTS idx_passkeys_user ON passkeys(user_id)',
         'CREATE TABLE IF NOT EXISTS challenges (id TEXT PRIMARY KEY, challenge TEXT NOT NULL, kind TEXT NOT NULL, user_id TEXT, created_at INTEGER NOT NULL)',
         'CREATE TABLE IF NOT EXISTS rate_limits (key TEXT PRIMARY KEY, count INTEGER NOT NULL, reset_at INTEGER NOT NULL)',
+        'CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)',
         'CREATE TABLE IF NOT EXISTS notifications (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT NOT NULL, kind TEXT NOT NULL, post_id INTEGER NOT NULL, answer_id INTEGER, created_at INTEGER NOT NULL, read_at INTEGER NOT NULL DEFAULT 0)',
         'CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications(user_id, created_at DESC)',
       ];
@@ -243,6 +244,13 @@ async function takeChallenge(env, id, kind) {
   return row;
 }
 
+// 사이트 설정 (운영 종료 등)
+async function siteClosed(env) {
+  const r = await env.DB.prepare("SELECT value FROM settings WHERE key = 'closed'").first();
+  return !!r && r.value === '1';
+}
+const CLOSED_MSG = '익명 라운지는 운영을 종료했어요. 함께해 주셔서 고마워요.';
+
 // ---------- 라우터 ----------
 export async function onRequest(context) {
   const { request, env } = context;
@@ -260,6 +268,9 @@ export async function onRequest(context) {
     await ensureSchema(env);
 
     // ===== 로그인 없이 쓰는 주소 =====
+    // 사이트 상태 (닫혔는지)
+    if (parts[0] === 'status' && method === 'GET') return json({ closed: await siteClosed(env) });
+
     // 처음 입장 (초대 코드). ADMIN_CODE는 소유자가 아직 없을 때 한 번만 통함
     if (parts[0] === 'join' && method === 'POST') {
       const rk = await rateKey(request, 'join');
@@ -279,6 +290,9 @@ export async function onRequest(context) {
           return json({ ...(await meView(env, u)), recoveryCode: recovery, ownerRestored: true }, 200, { 'set-cookie': cookie });
         }
         isAdmin = true;
+      } else if (await siteClosed(env)) {
+        // 운영 종료: 새로 들어오기 막음 (운영자 코드는 그대로)
+        return json({ error: CLOSED_MSG, closed: true }, 403);
       } else if (!(env.INVITE_CODE && safeEqual(c, env.INVITE_CODE))) {
         await noteFailure(env, rk);
         return fail(403, '초대 코드가 맞지 않아요.');
@@ -336,6 +350,8 @@ export async function onRequest(context) {
     // ===== 여기부터는 로그인 필요 =====
     const user = await currentUser(env, request);
     if (!user) return fail(401, '먼저 들어와 주세요.');
+    // 운영 종료: 운영자 말고는 아무것도 못 봄 (로그아웃만 가능)
+    if (!user.is_admin && !(parts[0] === 'logout') && (await siteClosed(env))) return json({ error: CLOSED_MSG, closed: true }, 403);
 
     if (parts[0] === 'logout' && method === 'POST') {
       await env.DB.prepare('DELETE FROM sessions WHERE token_hash = ?').bind(user.session_hash).run();
@@ -419,6 +435,16 @@ export async function onRequest(context) {
     // 운영자 화면
     if (parts[0] === 'admin') {
       if (!user.is_admin) return fail(403, '운영자만 볼 수 있어요.');
+      // 사이트 닫기/열기 (소유자만)
+      if (parts[1] === 'settings') {
+        if (method === 'GET') return json({ closed: await siteClosed(env), canChange: !!user.is_owner });
+        if (method === 'PATCH') {
+          if (!user.is_owner) return fail(403, '소유자만 바꿀 수 있어요.');
+          const b = await readJson(request);
+          await env.DB.prepare("INSERT INTO settings (key, value) VALUES ('closed', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").bind(b.closed ? '1' : '0').run();
+          return json({ closed: !!b.closed });
+        }
+      }
       if (parts[1] === 'users' && parts.length === 2 && method === 'GET') {
         const { results } = await env.DB.prepare(
           `SELECT u.id, u.is_admin, u.is_owner, u.banned, u.created_at, u.last_seen_at, u.recovery_hash IS NOT NULL AS has_recovery,

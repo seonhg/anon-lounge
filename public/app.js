@@ -104,6 +104,7 @@ async function api(path, opts = {}) {
   });
   const data = await res.json().catch(() => ({}));
   if (res.status === 401) { state.me = null; location.hash = '#/join'; throw new Error(data.error || '다시 들어와 주세요.'); }
+  if (res.status === 403 && data.closed && path !== '/join') { state.closed = true; setTimeout(closedView, 0); throw new Error(data.error); }
   if (data.banned && state.me && !state.me.banned) { state.me.banned = true; setTimeout(render, 0); }
   if (!res.ok) throw new Error(data.error || '문제가 생겼어요.');
   return data;
@@ -114,7 +115,7 @@ const bufToB64u = (buf) => { const a = new Uint8Array(buf); let s = ''; for (let
 // 팀즈 탭처럼 다른 화면 안에 들어가 있는지
 const inFrame = (() => { try { return window.top !== window.self; } catch { return true; } })();
 // 팀즈 안에서는 패스키 창이 막혀서 숨김 (복구 코드 사용)
-const passkeySupported = () => !inFrame && !!(window.PublicKeyCredential && navigator.credentials && window.isSecureContext);
+const passkeySupported = () => !inFrame && !window.AL_DEMO && !!(window.PublicKeyCredential && navigator.credentials && window.isSecureContext);
 const openOutside = () => h('a', { class: 'btn ghost sm', href: location.origin + '/', target: '_blank', rel: 'noopener' }, '새 창(브라우저)에서 열기');
 // 입장 직후 로그인이 정말 유지되는지 확인 (팀즈 안에서 쿠키가 막히는 경우 대비)
 async function cookieWorks() {
@@ -277,7 +278,7 @@ function emojiButton(...args) {
   const putEmoji = (e) => { insertAtCursor(last, e); rememberEmoji(e); };
   const putMedia = (m) => { if (media.add(m)) { close(); toast(m.type === 'gif' ? 'GIF를 붙였어요' : '스티커를 붙였어요'); } };
   const emojiBtn = (e) => h('button', { type: 'button', class: 'em', 'aria-label': e, onclick: () => putEmoji(e) }, e);
-  const mediaBtn = (m) => h('button', { type: 'button', class: `md ${m.type}`, 'aria-label': m.label || (m.type === 'gif' ? 'GIF' : '스티커'), title: m.label || '', onclick: () => putMedia(m) }, h('img', { src: m.preview || m.src, alt: '', loading: 'lazy' }));
+  const mediaBtn = (m) => h('button', { type: 'button', class: `pk-md ${m.type}`, 'aria-label': m.label || (m.type === 'gif' ? 'GIF' : '스티커'), title: m.label || '', onclick: () => putMedia(m) }, h('img', { src: m.preview || m.src, alt: '', loading: 'lazy' }));
   const section = (title, toTab, content) => h('div', { class: 'pk-sec' },
     h('div', { class: 'pk-sec-h' }, h('b', {}, title), toTab ? h('button', { type: 'button', class: 'pk-more', onclick: () => { tab = toTab; draw(); } }, '모두 보기 ›') : null), content);
   const giphyNote = () => h('div', { class: 'pk-note' }, 'GIF는 운영자가 GIPHY 키를 설정하면 쓸 수 있어요.');
@@ -1055,6 +1056,49 @@ function accountSection() {
   return sec;
 }
 
+// ---------- 운영 종료 안내 ----------
+function closedView() {
+  const err = h('div', { class: 'err', role: 'alert' });
+  const code = h('input', { id: 'admin-code', type: 'password', autocomplete: 'off', placeholder: '운영자 코드' });
+  const adminForm = h('form', { class: 'join-sec', onsubmit: async (e) => {
+    e.preventDefault(); err.textContent = '';
+    try {
+      const r = await api('/join', { method: 'POST', body: { code: code.value.trim() } });
+      const { recoveryCode, ...me } = r;
+      recoveryModal(recoveryCode, () => { state.me = me; state.closed = false; location.hash = '#/admin'; render(); });
+    } catch (ex) { err.textContent = ex.message; }
+  } }, h('label', { class: 'field', for: 'admin-code' }, '운영자 코드', code), err, h('button', { class: 'btn ghost', type: 'submit' }, '운영자 입장'));
+  app.replaceChildren(h('div', { class: 'center' }, h('div', { class: 'card join closed-card' },
+    h('div', { class: 'closed-emoji', 'aria-hidden': 'true' }, '🌙'),
+    h('h1', {}, '익명 라운지'),
+    h('p', { style: 'margin:0;font-size:17px;font-weight:700' }, '운영을 종료했어요.'),
+    h('p', { class: 'sub', style: 'margin:0' }, '함께 질문하고 정리해 주셔서 고마워요. 수업 관련 소통은 반 공식 채널을 이용해 주세요.'),
+    h('a', { class: 'btn', href: '/demo' }, '체험판 둘러보기'),
+    h('p', { class: 'sub', style: 'margin:0;font-size:12.5px' }, '체험판은 예시 글로만 움직이고, 실제 글은 보이지 않아요.'),
+    h('details', { class: 'admin-door' }, h('summary', {}, '운영자'), adminForm))));
+}
+function siteSettingsCard() {
+  const box = h('section', { class: 'card site-settings', 'aria-labelledby': 'site-h' }, h('p', { class: 'sub', style: 'margin:0' }, '불러오는 중…'));
+  api('/admin/settings').then((st) => {
+    const sw = h('input', { type: 'checkbox', role: 'switch', 'aria-label': '사이트 닫기', checked: st.closed ? true : null, disabled: st.canChange ? null : true });
+    sw.addEventListener('change', async () => {
+      const closing = sw.checked;
+      if (closing && !confirm('사이트를 닫을까요?\n\n- 수강생은 종료 안내만 보고 글을 볼 수 없어요.\n- 새로 들어올 수 없어요.\n- 운영자는 그대로 들어와 관리할 수 있어요.\n- 언제든 다시 열 수 있어요.')) { sw.checked = false; return; }
+      try { await api('/admin/settings', { method: 'PATCH', body: { closed: closing } }); toast(closing ? '사이트를 닫았어요' : '사이트를 다시 열었어요'); siteSettingsCard && box.replaceWith(siteSettingsCard()); }
+      catch (e) { toast(e.message); sw.checked = !closing; }
+    });
+    box.replaceChildren(
+      h('div', { class: 'row' },
+        h('div', {}, h('h2', { id: 'site-h', style: 'margin:0;font-size:16px' }, st.closed ? '🌙 사이트가 닫혀 있어요' : '사이트 운영 중'),
+          h('p', { class: 'sub', style: 'margin:4px 0 0;font-size:13px' }, st.closed
+            ? '수강생에게는 종료 안내와 체험판 링크만 보여요. 운영자만 들어올 수 있어요.'
+            : '닫으면 수강생은 종료 안내만 보고, 새로 들어올 수도 없어요. 데이터는 그대로 남아요.')),
+        h('span', { class: 'switch' }, sw, h('i'))),
+      ...(st.canChange ? [] : [h('p', { class: 'sub', style: 'margin:0;font-size:12.5px' }, '사이트 열고 닫기는 소유자만 할 수 있어요.')]));
+  }).catch((e) => box.replaceChildren(h('p', { class: 'sub' }, e.message)));
+  return box;
+}
+
 // ---------- 운영 ----------
 async function adminView() {
   if (!state.me.isAdmin) { location.hash = '#/'; return; }
@@ -1062,6 +1106,7 @@ async function adminView() {
   app.replaceChildren(shell('admin', [
     h('h1', {}, '운영'),
     h('p', { class: 'sub' }, '사용자는 번호(#…)로만 보여요. 실명은 본인이 켰을 때만 글에 나와요.'),
+    siteSettingsCard(),
     box]));
   let data;
   try { data = await api('/admin/users'); } catch (e) { box.replaceChildren(h('p', { class: 'empty' }, e.message)); return; }
@@ -1593,7 +1638,13 @@ async function render() {
   if (!state.me && hash !== '#/join') {
     try { state.me = await api('/me'); } catch { return; }
   }
-  if (hash === '#/join') return joinView();
+  // 체험판은 입장 화면 없이 바로
+  if (window.AL_DEMO && hash === '#/join') { location.replace('#/'); return; }
+  if (hash === '#/join') {
+    // 운영 종료면 입장 화면 대신 종료 안내
+    try { const st = await (await fetch('/api/status', { cache: 'no-store' })).json(); if (st.closed) { state.closed = true; return closedView(); } } catch {}
+    return joinView();
+  }
   refreshAlerts();
   const m = hash.match(/^#\/post\/(\d+)$/);
   if (m) return postView(m[1]);

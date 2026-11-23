@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>익명 라운지 · 체험판</title>
+  <meta name="description" content="수강생 익명 Q&amp;A·위키 정리 게시판 '익명 라운지' 체험판. 예시 데이터로 모든 기능을 써볼 수 있어요.">
+  <meta name="theme-color" content="#F5F3FF">
+  <script src="/theme.js"></script>
+  <!-- 체험판: 서버 대신 브라우저 안의 가짜 서버가 예시 데이터로 대답해요 (실제 데이터와 완전히 분리) -->
+  <script src="/demo.js"></script>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body class="is-demo">
+  <div class="demo-bar" role="note">
+    <b>체험판</b><span>예시 데이터예요 · 써 본 글은 새로고침하면 사라져요</span>
+    <a href="https://github.com/seonhg/anon-lounge" target="_blank" rel="noopener">GitHub</a>
+  </div>
+  <div id="app" aria-live="polite"></div>
+  <div id="toast" role="status" hidden></div>
+  <script src="/app.js" type="module"></script>
+</body>
+</html>
