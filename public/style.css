@@ -25,7 +25,7 @@
   --toast-bg: #1E1A3A; --toast-ink: #FFFFFF;
   --radius: 16px;
 }
-/* 다크: 포스터 같은 네온 퍼플 (작은 글씨만 조금 더 밝게) */
+/* 다크: 네온 퍼플 (작은 글씨만 조금 더 밝게) */
 :root[data-theme="dark"] {
   color-scheme: dark;
   --bg: #0A0920;
@@ -594,7 +594,7 @@ input.fx-in { min-height: 44px; }
 .fx-in:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); outline: none; }
 .fx-in[readonly] { opacity: .7; }
 .metoo { margin-left: 0; }
-.fx-move { display: inline-flex; align-items: center; gap: 4px; margin-right: auto; }
+.fx-move { display: inline-flex; align-items: center; gap: 4px; margin-left: 12px; }
 
 /* 링크로 된 글쓰기 막대 (정리·해결): 밑줄 없이, 휴대폰에서 화면 밖으로 넘치지 않게 */
 a.compose-bar { width: auto; text-decoration: none; }

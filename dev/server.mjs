@@ -23,7 +23,8 @@ const D1 = {
     return stmt;
   },
 };
-const env = { DB: D1, INVITE_CODE: process.env.INVITE_CODE || 'test-code', ADMIN_CODE: process.env.ADMIN_CODE || 'admin-code' };
+const env = { DB: D1, INVITE_CODE: process.env.INVITE_CODE || 'test-code', ADMIN_CODE: process.env.ADMIN_CODE || 'admin-code',
+  SITE_NAME: process.env.SITE_NAME, SITE_SUBJECTS: process.env.SITE_SUBJECTS, SITE_START_SUBJECT: process.env.SITE_START_SUBJECT };
 // GIPHY 흉내 (테스트용): GIPHY_FAKE=1 이면 api.giphy.com 대신 가짜 결과
 if (process.env.GIPHY_FAKE) {
   env.GIPHY_API_KEY = 'fake';

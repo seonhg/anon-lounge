@@ -1,6 +1,6 @@
 // 익명 라운지 — 질문·정리·해결 탭 (빌드 도구 없이 바로 동작하는 순수 JS)
 
-let SUBJECTS = ['AI 기본', 'GitHub', '파이썬 기본', '클라우드 컴퓨팅', '데이터 전처리', '클라우드 ML', '파이썬 ML', '파이썬 딥러닝', '프로젝트 1', '클라우드 OpenAI', '클라우드 딥러닝', '웹 프론트엔드', '프로젝트 2', '웹 앱 제작', 'AI SaaS', 'MS Learn'];
+let SUBJECTS = ['오리엔테이션', 'Git·GitHub', '파이썬 기초', '개발 환경', '데이터 수집', '데이터 전처리', '데이터 시각화', '딥러닝 기초', '팀 프로젝트 1', 'LLM 활용', 'RAG·에이전트', '웹 프론트엔드', '백엔드 API', '배포·운영', '팀 프로젝트 2', '마무리']; // 처음 값. 서버 설정(functions/_lib/config.js)을 받아 바뀜
 const CATS = ['질문', '잡담', '건의'];
 let SITE_NAME = '익명 라운지'; // 서버 설정(functions/_lib/config.js)을 받아서 바뀜
 function applySite(site) {

@@ -26,7 +26,7 @@ with sync_playwright() as p:
     check('답변 쓰기 (브라우저 안에서만)', '체험판에서 단 답변' in pg.inner_text('.answers'))
     pg.goto(B+'/demo#/'); pg.wait_for_selector('.compose-open'); pg.click('.compose-open'); pg.fill('.title-in','체험판 첫 글'); pg.click('.composer .emoji-btn'); pg.click('.pk-tabs button:has-text("스티커")'); pg.locator('.pk-sec').first.locator('.pk-md').nth(2).click(); pg.click('.comp-foot .btn'); pg.wait_for_timeout(600)
     check('글쓰기 + 스티커', pg.locator('.item', has_text='체험판 첫 글').locator('.media-thumb').count() == 1)
-    pg.click('.side a[href="#/notes"]'); pg.wait_for_selector('.item-title'); pg.locator('.item-title', has_text='클라우드 OpenAI').click(); pg.wait_for_selector('article .toc'); pg.wait_for_timeout(300)
+    pg.click('.side a[href="#/notes"]'); pg.wait_for_selector('.item-title'); pg.locator('.item-title', has_text='Azure OpenAI 핵심').click(); pg.wait_for_selector('article .toc'); pg.wait_for_timeout(300)
     check('정리: 목차·각주·함께 정리한 사람', pg.locator('article .toc li').count() >= 3 and pg.locator('.fn-ref').count() >= 1 and pg.locator('.contrib').count() == 3)
     pg.screenshot(path=O+'d3_note.png', full_page=True)
     pg.click('text=고친 기록'); pg.wait_for_selector('.rev-item'); pg.locator('.rev-item').nth(0).click(); pg.wait_for_selector('.diff'); pg.wait_for_timeout(200)

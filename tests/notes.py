@@ -41,7 +41,7 @@ with sync_playwright() as p:
     check('정리 탭이 열림 (준비 중 아님)', A.locator('h1', has_text='정리').count() == 1)
     # 새 정리 (나만 보기)
     A.click('a.compose-bar'); A.wait_for_selector('.note-body')
-    A.fill('.note-title', '클라우드 OpenAI 배포 정리'); A.fill('.note-body', BODY)
+    A.fill('.note-title', 'Azure OpenAI 배포 정리'); A.fill('.note-body', BODY)
     A.wait_for_timeout(500)
     check('쓰는 동안 오른쪽에 미리보기 (목차 포함)', A.locator('.note-preview .toc li').count() == 3, str(A.locator('.note-preview .toc li').count()))
     # 도구 막대: 굵게
@@ -91,7 +91,7 @@ with sync_playwright() as p:
     # 동시에 고치기 → 충돌
     go(A, f'#/notes/{nid}/edit'); A.wait_for_function("document.querySelector('.note-body') && document.querySelector('.note-body').value.includes('비용 아끼기')")
     go(Bq, f'#/notes/{nid}/edit'); Bq.wait_for_function("document.querySelector('.note-body') && document.querySelector('.note-body').value.includes('비용 아끼기')")
-    Bq.fill('.note-title', '클라우드 OpenAI 배포 정리 (B 수정)'); Bq.wait_for_timeout(3200); Bq.click('.note-editor .comp-foot .btn:not(.ghost)'); Bq.wait_for_selector('article.note')
+    Bq.fill('.note-title', 'Azure OpenAI 배포 정리 (B 수정)'); Bq.wait_for_timeout(3200); Bq.click('.note-editor .comp-foot .btn:not(.ghost)'); Bq.wait_for_selector('article.note')
     A.fill('.note-title', 'A가 동시에 고친 제목'); A.click('.note-editor .comp-foot .btn:not(.ghost)'); A.wait_for_selector('.conflict:not([hidden])')
     check('동시에 고치면 충돌 안내 + 내 글은 그대로', 'A가 동시에 고친 제목' == A.input_value('.note-title') and '다른 사람이' in A.inner_text('.conflict'))
     A.screenshot(path=O+'w3_conflict.png')

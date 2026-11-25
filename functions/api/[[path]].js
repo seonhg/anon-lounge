@@ -5,7 +5,7 @@ import { NOTE_SCHEMA, handleNotes, noteHelpsReceived, migrateNotes } from '../_l
 import { migrateProfile, myProfile, profilesFor, handleProfile } from '../_lib/profile.js';
 import { migrateMedia, cleanMedia, viewMedia, handleGifs } from '../_lib/media.js';
 import { FIX_SCHEMA, handleFixes } from '../_lib/fixes.js';
-import { SITE, SUBJECT_COUNT } from '../_lib/config.js';
+import { SITE, SUBJECT_COUNT, applyEnvConfig } from '../_lib/config.js';
 
 const CATS = ['질문', '잡담', '건의'];
 // 과목 구분 없이 모든 과목 화면에 같이 보이는 말머리 (subject = 0)
@@ -251,7 +251,7 @@ async function siteClosed(env) {
   const r = await env.DB.prepare("SELECT value FROM settings WHERE key = 'closed'").first();
   return !!r && r.value === '1';
 }
-const CLOSED_MSG = `${SITE.name}는 운영을 종료했어요. 함께해 주셔서 고마워요.`;
+const closedMsg = () => `${SITE.name}는 운영을 종료했어요. 함께해 주셔서 고마워요.`;
 
 // ---------- 라우터 ----------
 export async function onRequest(context) {
@@ -259,6 +259,7 @@ export async function onRequest(context) {
   const url = new URL(request.url);
   const parts = url.pathname.replace(/^\/api\/?/, '').split('/').filter(Boolean);
   const method = request.method;
+  applyEnvConfig(env); // 사이트 이름·과목 목록 (환경 변수가 있으면 우선)
 
   try {
     // 다른 사이트에서 몰래 보내는 요청 막기 (CSRF): 쓰기 요청은 이 사이트에서 온 것만
@@ -294,7 +295,7 @@ export async function onRequest(context) {
         isAdmin = true;
       } else if (await siteClosed(env)) {
         // 운영 종료: 새로 들어오기 막음 (운영자 코드는 그대로)
-        return json({ error: CLOSED_MSG, closed: true }, 403);
+        return json({ error: closedMsg(), closed: true }, 403);
       } else if (!(env.INVITE_CODE && safeEqual(c, env.INVITE_CODE))) {
         await noteFailure(env, rk);
         return fail(403, '초대 코드가 맞지 않아요.');
@@ -354,7 +355,7 @@ export async function onRequest(context) {
     const user = await currentUser(env, request);
     if (!user) return fail(401, '먼저 들어와 주세요.');
     // 운영 종료: 운영자 말고는 아무것도 못 봄 (로그아웃만 가능)
-    if (!user.is_admin && !(parts[0] === 'logout') && (await siteClosed(env))) return json({ error: CLOSED_MSG, closed: true }, 403);
+    if (!user.is_admin && !(parts[0] === 'logout') && (await siteClosed(env))) return json({ error: closedMsg(), closed: true }, 403);
 
     if (parts[0] === 'logout' && method === 'POST') {
       await env.DB.prepare('DELETE FROM sessions WHERE token_hash = ?').bind(user.session_hash).run();

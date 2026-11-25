@@ -17,7 +17,7 @@ ${lines.map((l, i) => `<text x="28" y="${84 + i * 32}" fill="${l[1] || '#E8E6F5'
 <rect x="20" y="${70 + lines.length * 32}" width="10" height="22" fill="${accent}"/></svg>`);
   const IMG = {
     e429: shot('python — chat.py', [['$ python chat.py', '#9AE6B4'], ['Traceback (most recent call last):'], ['  File "chat.py", line 18, in <module>'], ['    resp = client.chat.completions.create('], ['openai.RateLimitError: Error code: 429', '#FF8FA3'], ["  {'error': {'code': '429', 'message':", '#FF8FA3'], ["   'Requests to the ChatCompletions_Create", '#FF8FA3'], ["    Operation ... have exceeded token rate", '#FF8FA3'], ["    limit of your current OpenAI S0 tier.'}}", '#FF8FA3']], '#FF8FA3'),
-    deploy: shot('Azure AI Foundry — 배포', [['배포 이름          모델            상태', '#B9B4D6'], ['─────────────────────────────────────', '#4B4470'], ['gpt-4o-mini-lab   gpt-4o-mini     ✔ 성공', '#9AE6B4'], ['embed-small       text-embedding  ✔ 성공', '#9AE6B4'], [''], ['엔드포인트: https://ms11-lab.openai.azure.com/', '#C4B5FD'], ['키: ••••••••••••••••••••', '#C4B5FD']], '#9AE6B4'),
+    deploy: shot('Azure AI Foundry — 배포', [['배포 이름          모델            상태', '#B9B4D6'], ['─────────────────────────────────────', '#4B4470'], ['gpt-4o-mini-lab   gpt-4o-mini     ✔ 성공', '#9AE6B4'], ['embed-small       text-embedding  ✔ 성공', '#9AE6B4'], [''], ['엔드포인트: https://my-lab.openai.azure.com/', '#C4B5FD'], ['키: ••••••••••••••••••••', '#C4B5FD']], '#9AE6B4'),
     git: shot('git — terminal', [['$ git pull origin main', '#9AE6B4'], ['Auto-merging app.py'], ['CONFLICT (content): Merge conflict in app.py', '#FF8FA3'], ['Automatic merge failed; fix conflicts and', '#FF8FA3'], ['then commit the result.', '#FF8FA3'], [''], ['<<<<<<< HEAD', '#FEBC2E'], ['model = "gpt-4o-mini"'], ['=======', '#FEBC2E'], ['model = "gpt-4o"'], ['>>>>>>> origin/main', '#FEBC2E']], '#FEBC2E'),
     cuda: shot('jupyter — train.ipynb', [['In [7]: model.to("cuda")', '#9AE6B4'], [''], ['RuntimeError: CUDA out of memory.', '#FF8FA3'], ['Tried to allocate 2.00 GiB (GPU 0;', '#FF8FA3'], ['15.77 GiB total capacity; 13.20 GiB', '#FF8FA3'], ['already allocated)', '#FF8FA3'], [''], ['batch_size = 64', '#C4B5FD']], '#FF8FA3'),
   };
@@ -62,7 +62,7 @@ ${lines.map((l, i) => `<text x="28" y="${84 + i * 32}" fill="${l[1] || '#E8E6F5'
 
   const p5 = P({ user_id: '3c4d5e000008', cat: '잡담', subject: 0, title: '오늘 실습 다들 몇 시에 끝났어요? 😂', body: '저는 9시까지 붙잡고 있었네요…', created_at: now - 50 * MIN, media: [{ type: 'sticker', id: 'sleepy' }] });
   A(p5, { user_id: 'a1b2c3000002', body: '저도요 ㅋㅋ 내일 커피 필수', created_at: now - 40 * MIN, media: [{ type: 'sticker', id: 'coffee' }] });
-  P({ user_id: '9a8b7c000006', author_name: '박하늘', cat: '잡담', subject: 0, title: '주말에 같이 복습 스터디 하실 분!', body: '토요일 오후에 온라인으로 클라우드 OpenAI 복습해요. 편하게 오세요 📚', created_at: now - 1.2 * DAY, help_count: 2 });
+  P({ user_id: '9a8b7c000006', author_name: '박하늘', cat: '잡담', subject: 0, title: '주말에 같이 복습 스터디 하실 분!', body: '토요일 오후에 온라인으로 LLM 활용 복습해요. 편하게 오세요 📚', created_at: now - 1.2 * DAY, help_count: 2 });
   P({ user_id: '4e5f6a000007', author_name: '이도윤', cat: '건의', subject: 0, title: '다크 모드 너무 좋아요 + 정리에 표 기능도 있으면', body: '정리 쓸 때 표도 넣을 수 있으면 좋겠어요!', created_at: now - 3 * DAY, help_count: 1 });
 
   // ---------- 정리 ----------
@@ -99,7 +99,7 @@ resp = client.chat.completions.create(model="배포 이름", messages=[...])
 ## 비용 아끼기
 - 실습 끝나면 안 쓰는 배포는 지우기
 - 긴 대화는 요약해서 토큰 줄이기`;
-  const n1 = N({ user_id: 'a1b2c3000002', subject: 10, title: '클라우드 OpenAI 핵심 정리', help_count: 7 }, [
+  const n1 = N({ user_id: 'a1b2c3000002', subject: 10, title: 'Azure OpenAI 핵심 정리', help_count: 7 }, [
     { by: 'a1b2c3000002', body: NOTE1_V1, at: now - 3 * DAY, summary: '처음 작성', added: 300 },
     { by: '4e5f6a000007', body: NOTE1_V2, at: now - 2 * DAY, summary: '자주 하는 실수 추가', added: 120 },
     { by: 'c0ffee000004', body: NOTE1_V3, at: now - 5 * HOUR, summary: '비용 아끼기 추가', added: 45 },
