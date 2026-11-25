@@ -129,7 +129,7 @@ Teams에는 익명 게시판이 없고, 질문과 답이 채팅에 흘러가 버
 - **프론트:** Vanilla JS, CSS 변수 테마, 반응형
 - **서버:** Cloudflare Pages Functions(Workers 런타임), D1
 - **인증:** 초대 코드, 해시 세션, 복구 코드, WebAuthn 패스키
-- **테스트:** Playwright 엔드투엔드 테스트 15개 묶음, **232개 검사** (`tests/`, `bash tests/run_all.sh`). 가상 인증기로 패스키 등록·로그인, 다른 사이트 iframe(Teams 흉내) 안 로그인, 동시 편집 충돌, 예전 DB 이전까지 확인해요.
+- **테스트:** Playwright 엔드투엔드 테스트 16개 묶음, **262개 검사** (`tests/`, `bash tests/run_all.sh`). 가상 인증기로 패스키 등록·로그인, 다른 사이트 iframe(Teams 흉내) 안 로그인, 동시 편집 충돌, 예전 DB 이전까지 확인해요.
 - **로컬 서버:** `dev/server.mjs`는 의존성 없이 Node 22 내장 SQLite로 D1을 흉내 내요.
 
 ## 체험판은 어떻게 만들었나
