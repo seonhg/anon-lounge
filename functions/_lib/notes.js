@@ -1,5 +1,6 @@
 // 정리 탭 API: 나만 보는 노트 + 모두 고칠 수 있는 공개 정리(위키)
 // 메인 라우터에서 handleNotes(ctx)로 부름. 처리하지 않는 주소면 null을 돌려줌.
+import { SUBJECT_COUNT } from './config.js';
 
 export const NOTE_SCHEMA = [
   `CREATE TABLE IF NOT EXISTS notes (
@@ -142,7 +143,7 @@ export async function handleNotes(ctx) {
     const banned = banGuard(); if (banned) return banned;
     const b = await readJson(request);
     const subject = Number(b.subject);
-    if (!(subject >= 1 && subject <= 16)) return fail(400, '과목을 골라주세요.');
+    if (!(subject >= 1 && subject <= SUBJECT_COUNT)) return fail(400, '과목을 골라주세요.');
     const title = cleanText(b.title, MAX_TITLE) || '제목 없음';
     const body = cleanText(b.body, MAX_BODY);
     const vis = b.visibility === 'public' ? 'public' : 'private';

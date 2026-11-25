@@ -123,6 +123,30 @@ resp = client.chat.completions.create(model="배포 이름", messages=[...])
 - 평가(Evaluation) 플로우` },
   ]);
 
+
+  // ---------- 해결 기록 ----------
+  const fixes = [];
+  const F = (o) => { const f = { id: ++seq, deleted: 0, env: '', cause: '', solution: '', metoo: new Set(), author_name: null, solved_name: null, from_post_id: null, ...o }; f.updated_at = f.updated_at || f.created_at; fixes.push(f); return f; };
+  F({ user_id: 'a1b2c3000002', subject: 10, title: '채팅 실습 중 429 RateLimitError', created_at: now - 2 * HOUR, from_post_id: p1.id,
+    symptom: "openai.RateLimitError: Error code: 429\n{'error': {'code': '429', 'message': 'Requests to the ChatCompletions_Create Operation ... have exceeded token rate limit of your current OpenAI S0 tier.'}}",
+    env: 'Azure OpenAI · gpt-4o-mini · 무료 체험 구독', cause: '배포의 **분당 토큰 수(TPM)** 한도가 낮게 잡혀 있어서, 연속으로 요청하면 한도를 넘어요.',
+    solution: '1. Azure AI Foundry → 배포 → 해당 배포 편집 → **TPM**을 올려요.\n2. 그래도 나면 실패할 때 1초, 2초, 4초… 늘려가며 다시 보내요.\n```python\nfor i in range(5):\n    try:\n        return client.chat.completions.create(...)\n    except RateLimitError:\n        time.sleep(2 ** i)\n```',
+    solved_name: '박하늘', metoo: new Set(['7f3e9a000003', 'c0ffee000004', '5d6e7f000005', '3c4d5e000008']) });
+  F({ user_id: '7f3e9a000003', subject: 10, title: 'DeploymentNotFound — 모델 이름을 넣었는데 안 돼요', created_at: now - 6 * HOUR,
+    symptom: 'openai.NotFoundError: Error code: 404 - {\'error\': {\'code\': \'DeploymentNotFound\', \'message\': \'The API deployment for this resource does not exist.\'}}',
+    env: 'Python 3.11 · openai 1.x · AzureOpenAI 클라이언트', cause: 'Azure에서는 `model=` 자리에 **모델 이름이 아니라 배포 이름**을 넣어야 해요.',
+    solution: '배포 화면에서 배포 이름(예: `gpt-4o-mini-lab`)을 확인해서 `model="gpt-4o-mini-lab"`으로 바꿔요.', author_name: null, metoo: new Set(['a1b2c3000002', 'c0ffee000004']) });
+  F({ user_id: 'c0ffee000004', subject: 8, title: '학습 중 CUDA out of memory', created_at: now - 20 * HOUR,
+    symptom: 'RuntimeError: CUDA out of memory. Tried to allocate 2.00 GiB (GPU 0; 15.77 GiB total capacity; 13.20 GiB already allocated)',
+    env: 'Colab T4 · PyTorch 2.3 · batch_size 64', metoo: new Set(['5d6e7f000005']) });
+  F({ user_id: '5d6e7f000005', subject: 9, title: 'git pull 하니까 Merge conflict', created_at: now - 2 * DAY, from_post_id: p3.id,
+    symptom: 'CONFLICT (content): Merge conflict in app.py\nAutomatic merge failed; fix conflicts and then commit the result.',
+    env: 'VS Code · Git 2.45', cause: '팀원과 같은 파일의 같은 줄을 동시에 고쳤어요.',
+    solution: '`<<<<<<<` ~ `>>>>>>>` 사이에서 남길 줄만 남기고 표시 줄은 지운 뒤 `git add` → `git commit` 해요. VS Code의 **Accept Current / Incoming** 버튼이 편해요.', metoo: new Set(['a1b2c3000002']) });
+  F({ user_id: '4e5f6a000007', author_name: '이도윤', subject: 4, title: 'Codespaces에서 포트 열었는데 페이지가 안 떠요', created_at: now - 3 * DAY,
+    symptom: '브라우저에서 "This site can’t be reached" — 포트 탭에는 5000이 보이는데 접속이 안 돼요.',
+    env: 'GitHub Codespaces · Flask', cause: 'Flask가 기본으로 127.0.0.1에서만 들어요.', solution: '`app.run(host="0.0.0.0", port=5000)`으로 실행하고, 포트 탭에서 공개 범위를 확인해요.', solved_name: '이도윤' });
+
   // ---------- 알림 ----------
   const notifs = [
     { id: ++seq, user_id: ME.id, kind: 'answer', post_id: p3.id, answer_id: null, created_at: now - 2 * DAY + 50 * MIN, read_at: now - DAY },
@@ -356,6 +380,42 @@ resp = client.chat.completions.create(model="배포 이름", messages=[...])
       return ok({ profile, postsHidden: false, privateToOthers: !pf.showPosts,
         stats: { posts: own.length, answers: ans.length, helps: own.reduce((s, p) => s + p.help_count, 0) + ans.reduce((s, x) => s + x.help_count, 0) },
         posts: own.sort((x, y) => y.created_at - x.created_at).map((p) => ({ id: p.id, cat: p.cat, subject: p.subject, title: p.title, answers: answers.filter((x) => x.post_id === p.id && !x.deleted).length, helps: p.help_count, createdAt: p.created_at })) });
+    }
+    // 해결
+    if (a0 === 'fixes') {
+      const fview = (f) => ({ id: f.id, subject: f.subject, title: f.title, symptom: f.symptom.slice(0, 200), env: f.env, solved: !!f.solution, metoo: f.metoo.size, iMetoo: f.metoo.has(ME.id),
+        mine: f.user_id === ME.id, author: f.author_name || '익명', createdAt: f.created_at, updatedAt: f.updated_at, tag: tagOf(f.user_id), uid: f.user_id });
+      if (!a1 && method === 'GET') {
+        const sp = query.get('subject') || 'all', st = query.get('status') || 'all', q = (query.get('q') || '').trim().toLowerCase();
+        let list = fixes.filter((f) => !f.deleted && (sp === 'all' || f.subject === Number(sp)) && (st === 'all' || (st === 'solved') === !!f.solution)
+          && (!q || [f.title, f.symptom, f.env, f.cause, f.solution].some((t) => t.toLowerCase().includes(q))));
+        list = list.sort((x, y) => (query.get('sort') === 'metoo' ? y.metoo.size - x.metoo.size : 0) || y.updated_at - x.updated_at);
+        return ok({ fixes: list.map(fview) });
+      }
+      if (!a1 && method === 'POST') {
+        const title = clean(body.title, 100), symptom = clean(body.symptom, 5000);
+        if (!title) return err(400, '제목을 써주세요.');
+        if (!symptom) return err(400, '증상(에러 메시지나 막힌 상황)을 써주세요.');
+        const solution = clean(body.solution, 10000);
+        const f = F({ user_id: ME.id, author_name: me.showReal ? me.realName : null, subject: Number(body.subject) || me.mySubject, title, symptom, env: clean(body.env, 300), cause: clean(body.cause, 5000), solution,
+          solved_name: solution && me.showReal ? me.realName : null, from_post_id: body.fromPost || null, created_at: Date.now() });
+        return ok({ id: f.id });
+      }
+      const f = fixes.find((x) => x.id === Number(a1) && !x.deleted);
+      if (!f) return err(404, '지워졌거나 없는 기록이에요.');
+      if (a2 === 'metoo') { f.metoo.has(ME.id) ? f.metoo.delete(ME.id) : f.metoo.add(ME.id); return ok({ metoo: f.metoo.size, iMetoo: f.metoo.has(ME.id) }); }
+      if (method === 'GET') {
+        const fp = f.from_post_id && posts.find((p) => p.id === f.from_post_id && !p.deleted);
+        return ok({ fix: { ...fview(f), symptom: f.symptom, cause: f.cause, solution: f.solution, solvedBy: f.solution ? (f.solved_name || f.author_name || '익명') : null, fromPost: fp ? { id: fp.id, title: fp.title } : null },
+          canEdit: true, canEditAll: true, canDelete: true });
+      }
+      if (method === 'PATCH') {
+        for (const [k, m] of [['title', 100], ['symptom', 5000], ['env', 300], ['cause', 5000], ['solution', 10000]]) if (k in body) f[k] = clean(body[k], m);
+        if ('subject' in body) f.subject = Number(body.subject);
+        f.updated_at = Date.now();
+        return ok({ ok: true, solved: !!f.solution });
+      }
+      if (method === 'DELETE') { f.deleted = 1; return ok({ ok: true }); }
     }
     // 운영
     if (a0 === 'admin') {

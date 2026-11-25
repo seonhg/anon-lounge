@@ -4,6 +4,8 @@ import { b64urlToBytes, bytesToB64url, verifyRegistration, verifyAuthentication 
 import { NOTE_SCHEMA, handleNotes, noteHelpsReceived, migrateNotes } from '../_lib/notes.js';
 import { migrateProfile, myProfile, profilesFor, handleProfile } from '../_lib/profile.js';
 import { migrateMedia, cleanMedia, viewMedia, handleGifs } from '../_lib/media.js';
+import { FIX_SCHEMA, handleFixes } from '../_lib/fixes.js';
+import { SITE, SUBJECT_COUNT } from '../_lib/config.js';
 
 const CATS = ['질문', '잡담', '건의'];
 // 과목 구분 없이 모든 과목 화면에 같이 보이는 말머리 (subject = 0)
@@ -140,7 +142,7 @@ async function ensureSchema(env) {
         'CREATE TABLE IF NOT EXISTS notifications (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT NOT NULL, kind TEXT NOT NULL, post_id INTEGER NOT NULL, answer_id INTEGER, created_at INTEGER NOT NULL, read_at INTEGER NOT NULL DEFAULT 0)',
         'CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications(user_id, created_at DESC)',
       ];
-      for (const s of [...stmts, ...NOTE_SCHEMA]) await db.prepare(s).run();
+      for (const s of [...stmts, ...NOTE_SCHEMA, ...FIX_SCHEMA]) await db.prepare(s).run();
       await migrateNotes(db);
       await migrateProfile(db);
       await migrateMedia(db);
@@ -212,7 +214,7 @@ async function receivedHelps(env, userId) {
 async function meView(env, user) {
   const pk = await env.DB.prepare('SELECT COUNT(*) AS n FROM passkeys WHERE user_id = ?').bind(user.id).first();
   return {
-    mySubject: user.my_subject,
+    mySubject: Math.min(Math.max(user.my_subject || 1, 1), SUBJECT_COUNT),
     isAdmin: !!user.is_admin,
     isOwner: !!user.is_owner,
     banned: !!user.banned,
@@ -249,7 +251,7 @@ async function siteClosed(env) {
   const r = await env.DB.prepare("SELECT value FROM settings WHERE key = 'closed'").first();
   return !!r && r.value === '1';
 }
-const CLOSED_MSG = '익명 라운지는 운영을 종료했어요. 함께해 주셔서 고마워요.';
+const CLOSED_MSG = `${SITE.name}는 운영을 종료했어요. 함께해 주셔서 고마워요.`;
 
 // ---------- 라우터 ----------
 export async function onRequest(context) {
@@ -269,7 +271,7 @@ export async function onRequest(context) {
 
     // ===== 로그인 없이 쓰는 주소 =====
     // 사이트 상태 (닫혔는지)
-    if (parts[0] === 'status' && method === 'GET') return json({ closed: await siteClosed(env) });
+    if (parts[0] === 'status' && method === 'GET') return json({ closed: await siteClosed(env), site: SITE });
 
     // 처음 입장 (초대 코드). ADMIN_CODE는 소유자가 아직 없을 때 한 번만 통함
     if (parts[0] === 'join' && method === 'POST') {
@@ -299,8 +301,9 @@ export async function onRequest(context) {
       }
       const id = randomHex(12);
       const recovery = newRecoveryCode();
-      await env.DB.prepare('INSERT INTO users (id, token_hash, is_admin, is_owner, recovery_hash, created_at) VALUES (?, ?, ?, ?, ?, ?)')
-        .bind(id, 'unused-' + id, isAdmin ? 1 : 0, isAdmin ? 1 : 0, await sha256(normalizeRecovery(recovery)), Date.now()).run();
+      await env.DB.prepare('INSERT INTO users (id, token_hash, is_admin, is_owner, recovery_hash, created_at, my_subject) VALUES (?, ?, ?, ?, ?, ?, ?)')
+        .bind(id, 'unused-' + id, isAdmin ? 1 : 0, isAdmin ? 1 : 0, await sha256(normalizeRecovery(recovery)), Date.now(),
+          Math.min(Math.max(Number(SITE.startSubject) || 1, 1), SUBJECT_COUNT)).run();
       const cookie = await startSession(env, request, id);
       const user = await env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(id).first();
       return json({ ...(await meView(env, user)), recoveryCode: recovery }, 200, { 'set-cookie': cookie });
@@ -367,7 +370,7 @@ export async function onRequest(context) {
       if (method === 'GET') return json(await meView(env, user));
       if (method === 'PATCH') {
         const b = await readJson(request);
-        const subject = Number.isInteger(b.mySubject) && b.mySubject >= 1 && b.mySubject <= 16 ? b.mySubject : user.my_subject;
+        const subject = Number.isInteger(b.mySubject) && b.mySubject >= 1 && b.mySubject <= SUBJECT_COUNT ? b.mySubject : user.my_subject;
         const realName = b.realName !== undefined ? cleanText(b.realName, 20) : user.real_name || '';
         const showReal = b.showReal !== undefined ? (b.showReal && realName ? 1 : 0) : user.show_real;
         await env.DB.prepare('UPDATE users SET my_subject = ?, real_name = ?, show_real = ? WHERE id = ?')
@@ -393,8 +396,8 @@ export async function onRequest(context) {
           challengeId: ch.id,
           publicKey: {
             challenge: ch.challenge,
-            rp: { name: '익명 라운지', id: rpId },
-            user: { id: bytesToB64url(new TextEncoder().encode(user.id)), name: `익명 라운지 ${tagOf(user.id)}`, displayName: '익명 라운지' },
+            rp: { name: SITE.name, id: rpId },
+            user: { id: bytesToB64url(new TextEncoder().encode(user.id)), name: `${SITE.name} ${tagOf(user.id)}`, displayName: SITE.name },
             pubKeyCredParams: [{ type: 'public-key', alg: -7 }, { type: 'public-key', alg: -257 }],
             authenticatorSelection: { residentKey: 'required', requireResidentKey: true, userVerification: 'preferred' },
             attestation: 'none',
@@ -543,10 +546,10 @@ export async function onRequest(context) {
         `SELECT p.subject AS subject, COUNT(*) AS n
            FROM posts p
            LEFT JOIN reads r ON r.user_id = ?1 AND r.subject = p.subject
-          WHERE p.deleted = 0 AND p.user_id != ?1 AND p.subject BETWEEN 1 AND 16
+          WHERE p.deleted = 0 AND p.user_id != ?1 AND p.subject BETWEEN 1 AND ?3
             AND p.created_at > COALESCE(r.seen_at, ?2)
           GROUP BY p.subject`
-      ).bind(user.id, user.created_at).all();
+      ).bind(user.id, user.created_at, SUBJECT_COUNT).all();
       const unread = {};
       for (const r of results) unread[r.subject] = r.n;
       return json({ unread });
@@ -566,6 +569,12 @@ export async function onRequest(context) {
     // 정리 탭 (functions/_lib/notes.js)
     if (parts[0] === 'notes' || parts[0] === 'note-images') {
       const r = await handleNotes({ env, request, url, parts, method, user, H: { json, fail, cleanText, readJson, tagOf, looksLikeImage, IMAGE_TYPES, MAX_IMAGE_BYTES, nameFor, banGuard } });
+      if (r) return r;
+    }
+
+    // 해결 탭 (functions/_lib/fixes.js)
+    if (parts[0] === 'fixes') {
+      const r = await handleFixes({ env, request, url, parts, method, user, subjectCount: SUBJECT_COUNT, H: { json, fail, cleanText, readJson, tagOf, nameFor, banGuard } });
       if (r) return r;
     }
 
@@ -616,7 +625,7 @@ export async function onRequest(context) {
         const cat = CATS.includes(b.cat) ? b.cat : null;
         if (!cat) return fail(400, '말머리를 골라주세요.');
         const subject = isGlobal(cat) ? 0 : Number(b.subject);
-        if (!isGlobal(cat) && !(subject >= 1 && subject <= 16)) return fail(400, '과목을 골라주세요.');
+        if (!isGlobal(cat) && !(subject >= 1 && subject <= SUBJECT_COUNT)) return fail(400, '과목을 골라주세요.');
         const title = cleanText(b.title, 100);
         const body = cleanText(b.body, 5000);
         if (!title) return fail(400, '제목을 써주세요.');
@@ -699,7 +708,7 @@ export async function onRequest(context) {
         if (!cat) return fail(400, '말머리를 골라주세요.');
         let subject = b.subject === undefined ? post.subject : Number(b.subject);
         if (isGlobal(cat)) subject = 0;
-        else if (!(subject >= 1 && subject <= 16)) return fail(400, '과목을 골라주세요.');
+        else if (!(subject >= 1 && subject <= SUBJECT_COUNT)) return fail(400, '과목을 골라주세요.');
         let title = post.title, body = post.body;
         if (mine) {
           if (b.title !== undefined) title = cleanText(b.title, 100);

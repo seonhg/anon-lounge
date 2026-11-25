@@ -1,7 +1,14 @@
-// 익명 라운지 — 질문 탭 (빌드 도구 없이 바로 동작하는 순수 JS)
+// 익명 라운지 — 질문·정리·해결 탭 (빌드 도구 없이 바로 동작하는 순수 JS)
 
-const SUBJECTS = ['AI 기본', 'GitHub', '파이썬 기본', '클라우드 컴퓨팅', '데이터 전처리', '클라우드 ML', '파이썬 ML', '파이썬 딥러닝', '프로젝트 1', '클라우드 OpenAI', '클라우드 딥러닝', '웹 프론트엔드', '프로젝트 2', '웹 앱 제작', 'AI SaaS', 'MS Learn'];
+let SUBJECTS = ['AI 기본', 'GitHub', '파이썬 기본', '클라우드 컴퓨팅', '데이터 전처리', '클라우드 ML', '파이썬 ML', '파이썬 딥러닝', '프로젝트 1', '클라우드 OpenAI', '클라우드 딥러닝', '웹 프론트엔드', '프로젝트 2', '웹 앱 제작', 'AI SaaS', 'MS Learn'];
 const CATS = ['질문', '잡담', '건의'];
+let SITE_NAME = '익명 라운지'; // 서버 설정(functions/_lib/config.js)을 받아서 바뀜
+function applySite(site) {
+  if (!site) return;
+  if (Array.isArray(site.subjects) && site.subjects.length) SUBJECTS = site.subjects;
+  if (site.name) SITE_NAME = site.name;
+  state.site = site;
+}
 const TIER_COLORS = {
   브론즈: ['#FFD3A8', '#D08443', '#6E3A14', '#E39A5B', '#5A2C0E'],
   실버: ['#FFFFFF', '#B9C2CF', '#5B6574', '#C9D2DE', '#38414F'],
@@ -74,6 +81,8 @@ const ICON = {
   smile: '<circle cx="12" cy="12" r="9"/><path d="M8.5 14.5a4.5 4.5 0 0 0 7 0"/><path d="M9 9.5h.01M15 9.5h.01" stroke-width="3" stroke-linecap="round"/>',
   shield: '<path d="M12 3l8 3v6c0 4.5-3.4 8.3-8 9-4.6-.7-8-4.5-8-9V6z"/><path d="M9 12l2 2 4-4"/>',
   key: '<circle cx="8" cy="15" r="4"/><path d="M11 12l9-9M17 6l3 3M15 8l2 2"/>',
+  wrench: '<path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.8-3.8a6 6 0 0 1-7.9 7.9l-6.9 6.9a2.1 2.1 0 0 1-3-3l6.9-6.9a6 6 0 0 1 7.9-7.9z"/>',
+  hand: '<path d="M8 13V5.5a1.5 1.5 0 0 1 3 0V12M11 11.5v-7a1.5 1.5 0 0 1 3 0V12M14 11.5V6.5a1.5 1.5 0 0 1 3 0V15a6 6 0 0 1-6 6h-.5a6 6 0 0 1-5-2.7L3.3 15a1.6 1.6 0 0 1 2.6-1.8L8 15"/>',
 };
 const pad = (n) => (n < 10 ? '0' : '') + n;
 const subjName = (n) => (n === 0 ? '사이트' : `${pad(n)} ${SUBJECTS[n - 1]}`);
@@ -123,7 +132,7 @@ async function cookieWorks() {
 }
 function cookieBlockedView() {
   app.replaceChildren(h('div', { class: 'center' }, h('div', { class: 'card join' },
-    h('h1', {}, '익명 라운지'),
+    h('h1', {}, SITE_NAME),
     h('div', { class: 'warn' }, h('b', {}, '이 화면에서는 로그인이 저장되지 않아요.'), h('br'),
       '팀즈나 브라우저 설정이 이 사이트의 쿠키를 막고 있어요. 아래 버튼으로 브라우저에서 열어 주세요. 복구 코드를 저장해 두었다면 거기서 그대로 이어 쓸 수 있어요.'),
     openOutside())));
@@ -427,10 +436,10 @@ function shell(active, content) {
   const t = state.me?.tier;
   const unreadTotal = Object.values(state.unread).reduce((a, b) => a + b, 0);
   const side = h('nav', { class: 'side', 'aria-label': '메뉴' },
-    h('div', { class: 'brand' }, '익명 라운지'),
+    h('div', { class: 'brand' }, SITE_NAME),
     h('a', { class: 'tab', href: '#/', 'aria-current': active === 'q' ? 'page' : null }, svg(ICON.q, 20), '질문', unreadTotal ? h('span', { class: 'badge' }, unreadTotal) : null),
     h('a', { class: 'tab', href: '#/notes', 'aria-current': active === 'notes' ? 'page' : null }, svg(ICON.note, 20), '정리', h('span', { class: 'badge note-badge', hidden: Object.values(state.noteUnread || {}).reduce((a, b) => a + b, 0) ? null : true }, Object.values(state.noteUnread || {}).reduce((a, b) => a + b, 0))),
-    h('span', { class: 'tab', 'aria-disabled': 'true', title: '곧 열려요' }, svg(ICON.quiz, 20), '퀴즈', h('span', { class: 'soon' }, '준비 중')),
+    h('a', { class: 'tab', href: '#/fixes', 'aria-current': active === 'fixes' ? 'page' : null }, svg(ICON.wrench, 20), '해결'),
     h('a', { class: 'tab desk-only', href: '#/alerts', 'aria-current': active === 'alerts' ? 'page' : null }, svg(ICON.bell, 20), '알림', h('span', { class: 'badge alert-badge', hidden: !state.alerts ? true : null }, state.alerts)),
     state.me?.isAdmin ? h('a', { class: 'tab', href: '#/admin', 'aria-current': active === 'admin' ? 'page' : null, style: 'margin-top:auto' }, svg(ICON.shield, 20), '운영') : null,
     h('a', { class: 'tab', href: '#/settings', 'aria-current': active === 'set' ? 'page' : null, style: state.me?.isAdmin ? null : 'margin-top:auto' }, svg(ICON.gear, 20), '설정'),
@@ -484,7 +493,7 @@ function joinView() {
   h('button', { class: 'btn ghost', type: 'submit' }, '복구 코드로 들어가기'));
 
   const card = h('div', { class: 'card join' },
-    h('h1', {}, '익명 라운지'),
+    h('h1', {}, SITE_NAME),
     h('p', { class: 'sub', style: 'margin:0' }, '여기서 쓰는 글은 모두 익명이에요. 다른 수강생은 누가 썼는지 알 수 없어요.'),
     form, h('hr', { class: 'sep' }), back,
     inFrame ? h('p', { class: 'sub', style: 'margin:0;font-size:12.5px' }, '팀즈 안에서는 패스키 대신 복구 코드로 들어와요. 잘 안 되면 ', openOutside()) : null,
@@ -770,7 +779,8 @@ async function postView(id) {
       post.body ? h('p', { class: 'body' }, post.body) : null,
       mediaView(post.media),
       pics(post.images),
-      h('div', { class: 'meta' }, helpButton('post', post)),
+      h('div', { class: 'meta' }, helpButton('post', post),
+        post.cat === '질문' && !state.me.banned && answers.some((a) => !a.deleted) ? h('a', { class: 'link-btn fx-move', href: `#/fixes/from/${post.id}`, title: '풀린 질문을 증상·원인·해결 양식으로 정리해 해결 탭에 남겨요' }, svg(ICON.wrench, 14), '해결 기록으로 남기기') : null),
       h('h3', { style: 'margin:8px 0 0;font-size:15px' }, `답변 ${answers.filter((a) => !a.deleted).length}`),
       answers.length ? ansList : h('p', { class: 'sub', style: 'margin:0' }, '아직 답변이 없어요. 아는 만큼만 적어도 큰 도움이 돼요.')),
     state.me.banned ? bannedNote() : ansRoot,
@@ -1070,7 +1080,7 @@ function closedView() {
   } }, h('label', { class: 'field', for: 'admin-code' }, '운영자 코드', code), err, h('button', { class: 'btn ghost', type: 'submit' }, '운영자 입장'));
   app.replaceChildren(h('div', { class: 'center' }, h('div', { class: 'card join closed-card' },
     h('div', { class: 'closed-emoji', 'aria-hidden': 'true' }, '🌙'),
-    h('h1', {}, '익명 라운지'),
+    h('h1', {}, SITE_NAME),
     h('p', { style: 'margin:0;font-size:17px;font-weight:700' }, '운영을 종료했어요.'),
     h('p', { class: 'sub', style: 'margin:0' }, '함께 질문하고 정리해 주셔서 고마워요. 수업 관련 소통은 반 공식 채널을 이용해 주세요.'),
     h('a', { class: 'btn', href: '/demo' }, '체험판 둘러보기'),
@@ -1134,7 +1144,7 @@ async function adminView() {
 // ---------- 알림 ----------
 function paintAlerts() {
   document.querySelectorAll('.alert-badge').forEach((b) => { b.textContent = state.alerts; b.hidden = !state.alerts; });
-  document.title = state.alerts ? `(${state.alerts}) 익명 라운지` : '익명 라운지';
+  document.title = state.alerts ? `(${state.alerts}) ${SITE_NAME}` : SITE_NAME;
 }
 async function refreshAlerts() {
   if (!state.me) return;
@@ -1627,6 +1637,146 @@ async function noteHistoryView(id, rev) {
 
 // ---------- 라우팅 ----------
 window.addEventListener('beforeunload', (e) => { if (state.editorDirty?.()) { e.preventDefault(); e.returnValue = ''; } });
+// ---------- 해결 (트러블슈팅) ----------
+// 질문 탭은 모르는 걸 묻는 곳, 해결 탭은 겪은 문제와 푼 방법을 양식대로 남겨 두는 곳
+const FIX_FIELDS = [
+  ['symptom', '증상', '에러 메시지를 그대로 붙여넣거나, 어디서 막혔는지 적어요.', 5000],
+  ['env', '환경', '예: Windows 11 · Python 3.11 · Azure OpenAI gpt-4o-mini', 300],
+  ['cause', '원인', '왜 그랬는지 (모르면 비워 두세요. 다른 사람이 보탤 수 있어요)', 5000],
+  ['solution', '해결 방법', '어떻게 고쳤는지. 아직 못 고쳤으면 비워 두면 "미해결"로 올라가요.', 10000],
+];
+const fixState = { status: 'all', sort: 'recent', q: '' };
+const solvedTag = (solved) => h('span', { class: `tag ${solved ? 'fx-solved' : 'fx-open'}` }, solved ? '해결됨' : '미해결');
+
+function metooButton(f) {
+  const b = h('button', { type: 'button', class: 'help metoo', 'aria-pressed': f.iMetoo ? 'true' : 'false', title: '같은 문제를 겪었다면 눌러 주세요. 많이 겪은 문제가 위로 올라가요.' },
+    svg(ICON.hand, 14), `나도 겪었어요 ${f.metoo}`);
+  b.addEventListener('click', async () => {
+    try { const r = await api(`/fixes/${f.id}/metoo`, { method: 'POST' }); f.metoo = r.metoo; f.iMetoo = r.iMetoo; b.setAttribute('aria-pressed', r.iMetoo ? 'true' : 'false'); b.lastChild.textContent = `나도 겪었어요 ${r.metoo}`; } catch (e) { toast(e.message); }
+  });
+  return b;
+}
+
+async function fixesView() {
+  if (state.subject === null) state.subject = state.me.mySubject;
+  const list = h('ul', { class: 'list' }, h('li', { class: 'card empty' }, '불러오는 중…'));
+  const search = h('input', { class: 'fx-search', type: 'search', placeholder: '에러 메시지나 키워드로 찾기 (예: 429, DeploymentNotFound)', 'aria-label': '해결 기록 찾기', value: fixState.q, maxlength: '200' });
+  let timer;
+  search.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(() => { fixState.q = search.value.trim(); load(); }, 250); });
+  const chip = (key, val, label) => h('button', { type: 'button', class: 'chip', 'aria-pressed': fixState[key] === val ? 'true' : 'false',
+    onclick: (e) => { fixState[key] = val; e.currentTarget.parentNode.querySelectorAll('.chip').forEach((c) => c.setAttribute('aria-pressed', c === e.currentTarget ? 'true' : 'false')); load(); } }, label);
+  const filters = h('div', { class: 'fx-filters' },
+    h('div', { class: 'chips', role: 'group', 'aria-label': '상태' }, chip('status', 'all', '전체'), chip('status', 'open', '미해결'), chip('status', 'solved', '해결됨')),
+    h('div', { class: 'chips', role: 'group', 'aria-label': '정렬' }, chip('sort', 'recent', '최근'), chip('sort', 'metoo', '많이 겪은 순')));
+  const subj = state.subject === 'all' ? state.me.mySubject : state.subject;
+  const newBar = state.me.banned ? bannedNote() : h('a', { class: 'card compose-bar edge', href: `#/fixes/new/${subj}` },
+    h('span', { class: 'pen', 'aria-hidden': 'true' }, svg(ICON.wrench, 17)),
+    h('span', { class: 'ph' }, `${subjName(subj)} · 겪은 에러와 해결 방법을 남겨 보세요`),
+    h('span', { class: 'go', 'aria-hidden': 'true' }, '기록하기'));
+  app.replaceChildren(shell('fixes', [
+    h('header', {}, h('h1', {}, '해결'), h('p', { class: 'sub' }, '막혔던 문제를 증상 · 환경 · 원인 · 해결 순서로 남겨요. 원인과 해결 방법은 누구나 보탤 수 있어요.')),
+    subjectStrip({}), h('div', { class: 'card fx-tools edge' }, search, filters), newBar, list]));
+  async function load() {
+    try {
+      const q = new URLSearchParams({ subject: state.subject, status: fixState.status, sort: fixState.sort, q: fixState.q });
+      const { fixes } = await api(`/fixes?${q}`);
+      if (!fixes.length) {
+        list.replaceChildren(h('li', { class: 'card empty' }, fixState.q ? `"${fixState.q}"에 맞는 기록이 없어요. 질문 탭에 물어보고, 풀리면 여기에 남겨 주세요.` : '아직 기록이 없어요. 겪은 에러를 처음으로 남겨 보세요!'));
+        return;
+      }
+      list.replaceChildren(...fixes.map((f) => h('li', { class: 'card item edge' },
+        h('div', { class: 'item-main' },
+          h('div', { class: 'item-tags' }, solvedTag(f.solved), h('span', { class: 'tag' }, subjName(f.subject))),
+          h('a', { class: 'item-title', href: `#/fixes/${f.id}` }, f.title),
+          f.symptom ? h('code', { class: 'fx-ex' }, f.symptom) : null,
+          h('div', { class: 'meta' },
+            h('span', {}, `${f.author} · ${ago(f.updatedAt)}`), f.env ? h('span', { class: 'fx-env' }, f.env) : null, adminTag(f.tag, f.uid),
+            f.metoo ? h('span', { class: 'fx-count', 'aria-label': `${f.metoo}명이 겪음` }, svg(ICON.hand, 13), f.metoo) : null)))));
+    } catch (e) { list.replaceChildren(h('li', { class: 'card empty' }, e.message)); }
+  }
+  load();
+}
+
+async function fixView(id) {
+  app.replaceChildren(shell('fixes', [h('div', { class: 'card empty' }, '불러오는 중…')]));
+  let d;
+  try { d = await api(`/fixes/${id}`); } catch (e) { app.replaceChildren(shell('fixes', [h('a', { class: 'back', href: '#/fixes' }, svg(ICON.back), '해결'), h('div', { class: 'card empty' }, e.message)])); return; }
+  const f = d.fix;
+  const section = (label, text, { code = false, empty = '' } = {}) => h('section', { class: `fx-sec${text ? '' : ' fx-blank'}` },
+    h('h3', {}, label),
+    text ? (code ? h('pre', { class: 'fx-pre' }, text) : renderMd(text, { withToc: false })) : h('p', { class: 'sub', style: 'margin:0' }, empty));
+  app.replaceChildren(shell('fixes', [
+    h('a', { class: 'back', href: '#/fixes' }, svg(ICON.back), '해결'),
+    h('article', { class: 'card post fx edge' },
+      h('div', { class: 'item-tags' }, solvedTag(f.solved), h('span', { class: 'tag' }, subjName(f.subject))),
+      h('h2', {}, f.title),
+      h('div', { class: 'meta' },
+        h('span', {}, `${f.author} · ${ago(f.createdAt)}${f.updatedAt > f.createdAt + 1000 ? ` · ${ago(f.updatedAt)} 고침` : ''}`), adminTag(f.tag, f.uid),
+        d.canEdit ? h('a', { class: 'btn sm', href: `#/fixes/${id}/edit` }, f.solved ? '고치기·보태기' : '해결 방법 보태기') : null,
+        d.canDelete ? h('button', { type: 'button', class: 'link-btn', onclick: async () => {
+          if (!confirm('이 기록을 지울까요?')) return;
+          try { await api(`/fixes/${id}`, { method: 'DELETE' }); toast('지웠어요'); location.hash = '#/fixes'; } catch (e) { toast(e.message); }
+        } }, '지우기') : null),
+      section('증상', f.symptom, { code: true }),
+      f.env ? section('환경', f.env, { code: true }) : null,
+      section('원인', f.cause, { empty: '아직 원인이 적혀 있지 않아요. 아시면 보태 주세요.' }),
+      section('해결 방법', f.solution, { empty: '아직 해결되지 않았어요. 해결 방법을 알면 보태 주세요.' }),
+      f.solvedBy && f.solvedBy !== f.author ? h('p', { class: 'sub', style: 'margin:0;font-size:13px' }, `해결 방법을 처음 적은 사람: ${f.solvedBy}`) : null,
+      f.fromPost ? h('p', { class: 'sub', style: 'margin:0;font-size:13px' }, '원래 질문: ', h('a', { href: `#/post/${f.fromPost.id}` }, f.fromPost.title)) : null,
+      h('div', { class: 'meta' }, metooButton(f))),
+  ]));
+}
+
+// 새 기록 / 고치기 / 질문에서 옮기기
+async function fixEditor({ id = null, subject = null, fromPost = null } = {}) {
+  app.replaceChildren(shell('fixes', [h('div', { class: 'card empty' }, '불러오는 중…')]));
+  let cur = null, canEditAll = true, prefill = {};
+  try {
+    if (id) { const d = await api(`/fixes/${id}`); cur = d.fix; canEditAll = d.canEditAll; prefill = cur; }
+    else if (fromPost) {
+      const { post, answers } = await api(`/posts/${fromPost}`);
+      const best = answers.filter((a) => !a.deleted && a.body).sort((a, b) => b.helps - a.helps || a.createdAt - b.createdAt)[0];
+      prefill = { title: post.title, symptom: post.body || post.title, solution: best ? best.body : '', subject: post.subject || state.me.mySubject };
+    }
+  } catch (e) { app.replaceChildren(shell('fixes', [h('a', { class: 'back', href: '#/fixes' }, svg(ICON.back), '해결'), h('div', { class: 'card empty' }, e.message)])); return; }
+  const subj = h('select', { 'aria-label': '과목', disabled: canEditAll ? null : true }, ...SUBJECTS.map((nm, i) => h('option', { value: i + 1 }, `${pad(i + 1)} ${nm}`)));
+  subj.value = String(prefill.subject || subject || (state.subject === 'all' || !state.subject ? state.me.mySubject : state.subject));
+  const title = h('input', { class: 'plain title-in', type: 'text', maxlength: '100', placeholder: '제목 (예: 채팅 실습 중 429 RateLimitError)', 'aria-label': '제목', value: prefill.title || '', readonly: canEditAll ? null : true });
+  const inputs = {};
+  const rows = FIX_FIELDS.map(([k, label, ph, max]) => {
+    const locked = k === 'symptom' && !canEditAll;
+    const el = k === 'env'
+      ? h('input', { class: 'fx-in', type: 'text', maxlength: String(max), placeholder: ph, value: prefill[k] || '', id: `fx-${k}` })
+      : h('textarea', { class: `fx-in${k === 'symptom' ? ' mono' : ''}`, rows: k === 'solution' ? '6' : '4', maxlength: String(max), placeholder: ph, id: `fx-${k}`, readonly: locked ? true : null });
+    if (k !== 'env') el.value = prefill[k] || '';
+    inputs[k] = el;
+    return h('div', { class: 'fx-field' }, h('label', { for: `fx-${k}` }, label, k === 'symptom' ? h('span', { class: 'req' }, ' 필수') : null), el);
+  });
+  const save = h('button', { class: 'btn', type: 'button' }, id ? '저장' : '기록 올리기');
+  save.addEventListener('click', async () => {
+    if (!title.value.trim()) { title.focus(); toast('제목을 써주세요.'); return; }
+    if (!inputs.symptom.value.trim()) { inputs.symptom.focus(); toast('증상을 써주세요.'); return; }
+    const body = { env: inputs.env.value, cause: inputs.cause.value, solution: inputs.solution.value };
+    if (canEditAll) Object.assign(body, { title: title.value, symptom: inputs.symptom.value, subject: Number(subj.value) });
+    save.disabled = true;
+    try {
+      if (id) { await api(`/fixes/${id}`, { method: 'PATCH', body }); toast('저장했어요'); location.hash = `#/fixes/${id}`; }
+      else { const r = await api('/fixes', { method: 'POST', body: { ...body, fromPost } }); toast(body.solution.trim() ? '해결 기록을 남겼어요' : '미해결로 올렸어요. 누군가 해결 방법을 보태 줄 거예요'); location.hash = `#/fixes/${r.id}`; }
+    } catch (e) { toast(e.message); save.disabled = false; }
+  });
+  app.replaceChildren(shell('fixes', [
+    h('a', { class: 'back', href: id ? `#/fixes/${id}` : '#/fixes' }, svg(ICON.back), id ? '기록으로' : '해결'),
+    h('header', {}, h('h1', {}, id ? (canEditAll ? '기록 고치기' : '해결 방법 보태기') : fromPost ? '질문을 해결 기록으로' : '새 해결 기록'),
+      h('p', { class: 'sub' }, fromPost ? '질문 내용과 도움됐어요를 가장 많이 받은 답변을 채워 뒀어요. 다듬어서 올려 주세요.'
+        : !canEditAll ? '원인·환경·해결 방법은 누구나 보탤 수 있어요. 제목과 증상은 처음 쓴 사람만 고칠 수 있어요.'
+        : 'API 키나 이름이 에러 메시지에 섞여 있지 않은지 확인해 주세요.')),
+    h('section', { class: 'card composer fx-form edge' },
+      h('div', { class: 'fx-top' }, subj), title, ...rows,
+      h('div', { class: 'comp-foot' }, h('span', { class: 'hint' }, state.me.showReal ? '실명으로 올라가요' : '익명으로 올라가요'), save)),
+  ]));
+  (canEditAll ? title : inputs.solution).focus();
+}
+
 async function render() {
   const hash = location.hash || '#/';
   // 정리를 쓰다가 저장 안 하고 나가려 하면 확인
@@ -1635,6 +1785,9 @@ async function render() {
     state.editorDirty = null;
   }
   state.curHash = hash;
+  if (!state.site) {
+    try { const st = await (await fetch('/api/status', { cache: 'no-store' })).json(); applySite(st.site || {}); state.closedAtLoad = !!st.closed; } catch { state.site = {}; }
+  }
   if (!state.me && hash !== '#/join') {
     try { state.me = await api('/me'); } catch { return; }
   }
@@ -1654,6 +1807,12 @@ async function render() {
   const pm = hash.match(/^#\/u\/([0-9a-f]+)$/);
   if (pm) return profileView(pm[1]);
   if (hash === '#/notes') return notesView();
+  let fm;
+  if (hash === '#/fixes') return fixesView();
+  if ((fm = hash.match(/^#\/fixes\/new(?:\/(\d+))?$/))) return fixEditor({ subject: fm[1] });
+  if ((fm = hash.match(/^#\/fixes\/from\/(\d+)$/))) return fixEditor({ fromPost: Number(fm[1]) });
+  if ((fm = hash.match(/^#\/fixes\/(\d+)\/edit$/))) return fixEditor({ id: fm[1] });
+  if ((fm = hash.match(/^#\/fixes\/(\d+)$/))) return fixView(fm[1]);
   let nm;
   if ((nm = hash.match(/^#\/notes\/new(?:\/(\d+))?$/))) return noteEditor(null, nm[1]);
   if ((nm = hash.match(/^#\/notes\/(\d+)\/edit$/))) return noteEditor(nm[1]);

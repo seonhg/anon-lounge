@@ -8,7 +8,7 @@ CREATE TABLE IF NOT EXISTS users (
   is_owner      INTEGER NOT NULL DEFAULT 0,  -- 소유자: 운영자를 지정/해제할 수 있음 (1명)
   banned        INTEGER NOT NULL DEFAULT 0,  -- 1이면 글쓰기 차단
   recovery_hash TEXT,                        -- 복구 코드의 SHA-256
-  my_subject    INTEGER NOT NULL DEFAULT 10,
+  my_subject    INTEGER NOT NULL DEFAULT 1,
   real_name     TEXT,
   show_real     INTEGER NOT NULL DEFAULT 0,
   created_at    INTEGER NOT NULL,

@@ -5,7 +5,7 @@
 #   bash tests/run_all.sh notes sec  # 골라서
 # 크롬 경로를 직접 지정하려면 CHROME_PATH=/usr/bin/google-chrome
 cd "$(dirname "$0")/.."
-SUITES=${*:-"e2e acct edit sec alerts replies emoji notes credit profile media teams chat closed demo"}
+SUITES=${*:-"e2e acct edit sec alerts replies emoji notes credit profile media teams chat closed demo fixes"}
 pass=0; fail=0
 for t in $SUITES; do
   pkill -f "node dev/server.mjs" 2>/dev/null; sleep 0.5

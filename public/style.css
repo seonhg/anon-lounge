@@ -566,3 +566,35 @@ a.btn { display: inline-flex; align-items: center; text-decoration: none; }
   .compose-bar .go { padding: 0 12px; }
 }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+
+/* ---------- 해결 (트러블슈팅) ---------- */
+.tag.fx-solved { background: var(--t-s-bg); color: var(--t-s); }
+.tag.fx-open { background: var(--t-c-bg); color: var(--t-c); }
+.fx-tools { display: flex; flex-direction: column; gap: 10px; padding: 12px 14px; }
+.fx-search { width: 100%; min-height: 44px; border: 1px solid var(--line); border-radius: 12px; padding: 0 14px; font-size: 15px; color: var(--ink); background: var(--field-bg); }
+.fx-search:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); outline: none; }
+.fx-filters { display: flex; gap: 8px 16px; flex-wrap: wrap; justify-content: space-between; }
+.fx-filters .chip { min-height: 34px; padding: 0 13px; font-size: 13.5px; }
+.fx-ex { display: block; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 13px; color: var(--muted); background: var(--soft-bg); border-radius: 8px; padding: 6px 10px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.fx-env { font-size: 12.5px; color: var(--dim); max-width: 280px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fx-count { display: inline-flex; align-items: center; gap: 3px; margin-left: auto; }
+.fx-sec { display: flex; flex-direction: column; gap: 8px; padding-top: 14px; border-top: 1px solid var(--line); }
+.fx-sec h3 { margin: 0; font-size: 13px; font-weight: 700; color: var(--muted); letter-spacing: .02em; }
+.fx-sec.fx-blank h3 { color: var(--dim); }
+.fx-sec .md > :last-child { margin-bottom: 0; }
+.fx-pre { margin: 0; padding: 12px 14px; border-radius: 12px; background: #1B1838; color: #ECE8FF; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 13.5px; line-height: 1.55; white-space: pre-wrap; word-break: break-word; max-height: 360px; overflow: auto; }
+.fx-form { gap: 14px; }
+.fx-top select { min-height: 40px; border: 1px solid var(--line); border-radius: 10px; padding: 0 10px; font-size: 14px; color: var(--ink); background: var(--field-bg); }
+.fx-field { display: flex; flex-direction: column; gap: 6px; }
+.fx-field label { font-size: 13.5px; font-weight: 700; color: var(--ink2); }
+.fx-field .req { font-weight: 400; color: var(--dim); font-size: 12px; }
+.fx-in { width: 100%; border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px; font-size: 15px; color: var(--ink); background: var(--field-bg); font-family: inherit; resize: vertical; line-height: 1.55; }
+input.fx-in { min-height: 44px; }
+.fx-in.mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 13.5px; }
+.fx-in:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); outline: none; }
+.fx-in[readonly] { opacity: .7; }
+.metoo { margin-left: 0; }
+.fx-move { display: inline-flex; align-items: center; gap: 4px; margin-right: auto; }
+
+/* 링크로 된 글쓰기 막대 (정리·해결): 밑줄 없이, 휴대폰에서 화면 밖으로 넘치지 않게 */
+a.compose-bar { width: auto; text-decoration: none; }
