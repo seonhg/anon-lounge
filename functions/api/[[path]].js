@@ -251,6 +251,15 @@ async function siteClosed(env) {
   const r = await env.DB.prepare("SELECT value FROM settings WHERE key = 'closed'").first();
   return !!r && r.value === '1';
 }
+// DB settings 의 'site' (사이트 이름·과목) — 1분 캐시
+let siteCache = { at: 0, val: null };
+async function dbSiteConfig(env) {
+  if (Date.now() - siteCache.at < 60000) return siteCache.val;
+  let val = null;
+  try { const r = await env.DB.prepare("SELECT value FROM settings WHERE key = 'site'").first(); if (r) val = JSON.parse(r.value); } catch {}
+  siteCache = { at: Date.now(), val };
+  return val;
+}
 const closedMsg = () => `${SITE.name}는 운영을 종료했어요. 함께해 주셔서 고마워요.`;
 
 // ---------- 라우터 ----------
@@ -269,6 +278,7 @@ export async function onRequest(context) {
       if ((origin && origin !== url.origin) || (site && !['same-origin', 'none'].includes(site))) return fail(403, '이 사이트에서만 보낼 수 있어요.');
     }
     await ensureSchema(env);
+    applyEnvConfig(env, await dbSiteConfig(env));
 
     // ===== 로그인 없이 쓰는 주소 =====
     // 사이트 상태 (닫혔는지)
